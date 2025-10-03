@@ -21,29 +21,25 @@ import asyncio
 import logging
 import os
 import random
-from dataclasses import dataclass, asdict, field, field
-from typing import Dict, Any, Optional, Tuple
+from dataclasses import asdict, dataclass, field
+from typing import Any, Dict, Iterable, Optional
 
-# Назва бота для відображення у повідомленнях (можна перевизначити змінною оточення BOT_DISPLAY_NAME)
-BOT_DISPLAY_NAME = os.getenv("BOT_DISPLAY_NAME", "RPG0")
-
-from telegram import (
-    Update,
-    InlineKeyboardMarkup,
-    InlineKeyboardButton,
-)
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
 from telegram.ext import (
     Application,
     ApplicationBuilder,
+    CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     ConversationHandler,
-    CallbackQueryHandler,
     MessageHandler,
     PicklePersistence,
     filters,
 )
+
+# Назва бота для відображення у повідомленнях
+BOT_DISPLAY_NAME = os.getenv("BOT_DISPLAY_NAME", "RPG0")
 
 # ----------------------------- ЛОГУВАННЯ -----------------------------
 logging.basicConfig(
@@ -56,6 +52,13 @@ LOGGER = logging.getLogger("RPG")
 CHOOSING_ACTION, ENEMY_TURN, LOOTING = range(3)
 
 # ----------------------------- ДАТАКЛАСИ -----------------------------
+
+
+def _get(data: Dict[str, Any], key: str, default: Any) -> Any:
+    value = data.get(key, default)
+    return default if value is None else value
+
+
 @dataclass
 class Player:
     name: str = "Мандрівник"
@@ -65,33 +68,30 @@ class Player:
     max_hp: int = 30
     atk: int = 6
     defense: int = 2
-    potions: int =gold: int = 0
-    inventory: list = field(default_factory=list)  # список предметів (dict) з рідкісністю
-    upgrades: dict = field(default_factory=dict)  # наприклад {"weapon":1, "armor":1}
-    nt = 0
-    inventory: list = field(default_factory=list)  # список предметів (dict) з рідкісністю
-    upgrades: dict = field(default_factory=dict)  # наприклад {"weapon":1, "armor":1}
+    potions: int = 2
+    gold: int = 0
+    inventory: list[Dict[str, Any]] = field(default_factory=list)
+    upgrades: Dict[str, int] = field(default_factory=dict)
 
     def is_alive(self) -> bool:
         return self.hp > 0
 
     def heal(self) -> int:
-        if self.potions <= 0:
+        if self.potions <= 0 or self.hp >= self.max_hp:
             return 0
         self.potions -= 1
         heal_amount = min(12, self.max_hp - self.hp)
         self.hp += heal_amount
         return heal_amount
 
-    def gain_exp(self, amount: int) -> Tuple[int, bool]:
-        """Повертає (новий рівень, чи відбувся ап)."""
+    def gain_exp(self, amount: int) -> tuple[int, bool]:
+        """Повертає (поточний рівень, чи стався ап)."""
         self.exp += amount
         leveled = False
         while self.exp >= self._exp_to_next():
             self.exp -= self._exp_to_next()
             self.level += 1
             leveled = True
-            # Невелике посилення при підвищенні рівня
             self.max_hp += 5
             self.atk += 2
             self.defense += 1
@@ -115,27 +115,47 @@ class Enemy:
     def is_alive(self) -> bool:
         return self.hp > 0
 
+
 # ----------------------------- УТИЛІТИ -----------------------------
 
+
+def dict_to_player(data: Optional[Dict[str, Any]]) -> Player:
+    if not data:
+        return Player()
+    return Player(
+        name=_get(data, "name", Player.name),
+        level=_get(data, "level", Player.level),
+        exp=_get(data, "exp", Player.exp),
+        hp=_get(data, "hp", Player.hp),
+        max_hp=_get(data, "max_hp", Player.max_hp),
+        atk=_get(data, "atk", Player.atk),
+        defense=_get(data, "defense", Player.defense),
+        potions=_get(data, "potions", Player.potions),
+        gold=_get(data, "gold", Player.gold),
+        inventory=list(_get(data, "inventory", [])),
+        upgrades=dict(_get(data, "upgrades", {})),
+    )
+
+
+def dict_to_enemy(data: Optional[Dict[str, Any]]) -> Enemy:
+    if not data:
+        raise ValueError("Ворог не знайдений у даних користувача")
+    return Enemy(
+        name=data.get("name", "Невідомий ворог"),
+        hp=data.get("hp", data.get("max_hp", 1)),
+        max_hp=data.get("max_hp", data.get("hp", 1)),
+        atk=data.get("atk", 1),
+        defense=data.get("defense", 0),
+        exp_reward=data.get("exp_reward", 5),
+        gold_reward=data.get("gold_reward", 3),
+    )
+
+
 def ensure_player(user_data: Dict[str, Any]) -> Player:
-    if "player" not in user_data:
-        user_data["player"] = asdict(Player())
-    # Збережено як dict для PicklePersistence дружності
-    p = dict_to_player(user_data["player"]) 
-    user_datdef roll_damage(atk: int, defense: int) -> int:
-    base = max(0, atk - defense)
-    variance = random.randint(-2, 2)
-    dmg = max(1, base + variance)
-    return dmg
-
-
-def roll_player_attack(atk: int, defense: int) -> tuple[int, bool]:
-    """Повертає (шкода, чи крит). 15% шанс криту x2."""
-    crit = random.random() < 0.15
-    dmg = roll_damage(atk, defense)
-    if crit:
-        dmg *= 2
-    return dmg, criturn Enemy(**d)
+    raw = user_data.get("player")
+    player = dict_to_player(raw)
+    user_data["player"] = asdict(player)
+    return player
 
 
 def roll_damage(atk: int, defense: int) -> int:
@@ -145,29 +165,11 @@ def roll_damage(atk: int, defense: int) -> int:
     return dmg
 
 
-def roll_player_attack(atk: int, defense: int) -> tuple[int, bool]:
-    """Повертає (шкода, чи крит). 15% шанс криту x2."""
-    crit = random.random() < 0.15
-    dmg = roll_damage(atk, defense)
-    if crit:
-        dmg *= 2
-    return dmg, crit
-
-
 def battle_keyboard(in_battle: bool = True) -> InlineKeyboardMarkup:
     if in_battle:
         buttons = [
             [InlineKeyboardButton("⚔️ Атака", callback_data="attack"),
-    def format_stats(p: Player) -> str:
-    inv_counts = {"⚪Звичайні":0, "🟢Незвичайні":0, "🔵Рідкісні":0, "🟣Епічні":0}
-    for it in p.inventory:
-        r = it.get("rarity","common")
-        if r=="common": inv_counts["⚪Звичайні"]+=1
-        elif r=="uncommon": inv_counts["🟢Незвичайні"]+=1
-        elif r=="rare": inv_counts["🔵Рідкісні"]+=1
-        elif r=="epic": inv_counts["🟣Епічні"]+=1
-    inv_str = ", ".join([f"{k}:{v}" for k,v in inv_counts.items() if v]) or "порожньо"
-    return (back_data="defend")],
+             InlineKeyboardButton("🛡️ Захист", callback_data="defend")],
             [InlineKeyboardButton("✨ Вміння", callback_data="skill"),
              InlineKeyboardButton("🧪 Зілля", callback_data="potion")],
             [InlineKeyboardButton("🏃 Втекти", callback_data="run")],
@@ -178,195 +180,194 @@ def battle_keyboard(in_battle: bool = True) -> InlineKeyboardMarkup:
 
 
 def format_stats(p: Player) -> str:
-    inv_counts = {"⚪Звичайні":0, "🟢Незвичайні":0, "🔵Рідкісні":0, "🟣Епічні":0}
-    for it in p.inventory:
-        r = it.get("rarity","common")
-        if r=="common": inv_counts["⚪Звичайні"]+=1
-        elif r=="uncommon": inv_counts["🟢Незвичайні"]+=1
-        elif r=="rare": inv_counts["🔵Рідкісні"]+=1
-        elif r=="epic": inv_counts["🟣Епічні"]+=1
-    inv_str = ", ".join([f"{k}:{v}" for k,v in inv_counts.items() if v]) or "порожньо"
+    inv_counts = {"⚪Звичайні": 0, "🟢Незвичайні": 0, "🔵Рідкісні": 0, "🟣Епічні": 0}
+    for item in p.inventory:
+        rarity = item.get("rarity", "common")
+        if rarity == "common":
+            inv_counts["⚪Звичайні"] += 1
+        elif rarity == "uncommon":
+            inv_counts["🟢Незвичайні"] += 1
+        elif rarity == "rare":
+            inv_counts["🔵Рідкісні"] += 1
+        elif rarity == "epic":
+            inv_counts["🟣Епічні"] += 1
+    inv_str = ", ".join(f"{k}: {v}" for k, v in inv_counts.items() if v) or "порожньо"
     return (
         f"<b>{p.name}</b> — рівень {p.level}\n"
         f"HP: {p.hp}/{p.max_hp} | Атака: {p.atk} | Захист: {p.defense}\n"
-        f"EXP: {p.exp}/{20 + (p.level - 1) * 10} | Зілля: {p.potions} | Золото: {p.gold}"
+        f"EXP: {p.exp}/{p._exp_to_next()} | Зілля: {p.potions} | Золото: {p.gold}\n"
+        f"Інвентар: {inv_str}"
     )
+
 
 # ----------------------------- КОМАНДИ -----------------------------
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    p = ensure_player(context.user_data)
+    player = ensure_player(context.user_data)
     welcome = (
-        f"👋 Вас вітає <b>{BOT_DISPLAY_NAME}</b> — покрокова RPG у сеттингу середньовічного фентезі!"
-async def inventory(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    p = ensure_player(context.user_data)
-    items = "\n".join([f"• {it['emoji']} {it['name']} ({it['title']})" for it in p.inventory]) or "немає предметів"
-    await update.message.reply_html"/f"🎒 Інвентар:\n🧪 Зілля: {p.potions}\n💰 Золото: {p.gold}\n{items}")     "/help — довідка")
-    await update.message.reply_html(welcome)
+        f"👋 Вас вітає <b>{BOT_DISPLAY_NAME}</b> — покрокова RPG у сеттингу середньовічного фентезі!\n\n"
+        "Команди:\n"
+        "• /newgame — почати спочатку\n"
+        "• /stats — показати характеристики\n"
+        "• /inventory — показати інвентар\n"
+        "• /explore — вирушити на пригоду\n"
+        "• /shop — торгова лавка\n"
+        "• /travel — змінити локацію\n"
+        "• /quest — взяти простий квест\n"
+    )
+    if update.message:
+        await update.message.reply_html(welcome + "\n" + format_stats(player))
+
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text("Питання? Напиши /start для списку команд.")
+    await update.message.reply_text("Питання? Напишіть /start для списку команд.")
+
 
 async def newgame(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    context.user_data["player"] = asdict(Player())
-    await update.message.reply_html("🆕 <b>Нова пригода розпочата!</b> Ваш герой створений. Використайте /explore.")
+    player = Player()
+    context.user_data["player"] = asdict(player)
+    context.user_data.pop("enemy", None)
+    context.user_data.pop("quest", None)
+    await update.message.reply_html("🆕 <b>Нова пригода розпочата!</b> Використайте /explore.")
+
 
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    p = ensure_player(context.user_data)
-    await update.message.reply_html(format_stats(p))
+    player = ensure_player(context.user_data)
+    await update.message.reply_html(format_stats(player))
+
 
 async def inventory(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    p = ensure_player(context.user_data)
-    items = "
-".join([f"• {it['emoji']} {it['name']} ({it['title']})" for it in p.inventory]) or "немає предметів"
-    await update.message.reply_html(ff"🎒 Інвентар:
-🧪 Зілля: {p.potions}
-💰 Золото: {p.gold}
-{items}")
-
-# ----------------------------- ДОСЛІДЖЕННЯ/ПРИГОДА -----------------------------
-async def explore(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    p = ensure_player(context.user_data)
-    location = get_location(context.user_data)
-
-    roll = random.random()
-    if roll < 0.6:
-        # Битва
-        enemy = spawn_enemy_for(p, location)
-        context.user_data["enemy"] = enemy.__dict__
-        context.user_data["defending"] = False
-        await update.message.reply_html(
-            f"🔪 [{location}] Ви натрапили на <b>{enemy.name}</b>!\n"
-            f"HP ворога: {enemy.hp}/{enemy.max_hp}",
-            reply_markup=battle_keyboard(True),
+    player = ensure_player(context.user_data)
+    if not player.inventory:
+        text = "🎒 Інвентар порожній."
+    else:
+        items = "\n".join(
+            f"• {item['emoji']} {item['name']} ({item['title']})" for item in player.inventory
         )
-        return CHOOSING_ACTION
-    elif roll < 0.85:
-        # Лут з рідкісністю
-        item = generate_loot(location)
-        p.inventory.append(item)
-        p.gold += item.get("gold", 0)
-        context.user_data["player"] = asdict(p)
-        extra = f" (+{item['gold']} золота)" if item.get("gold") else ""
-        await update.message.reply_html(
-            f"🧰 Знахідка у локації <b>{location}</b>: {item['emoji']} <b>{item['name']}</b> — {item['title']}{extra}!"
-        )
-        return ConversationHandler.END
-    else:
-        # Подія-відновлення
-        heal = min(p.max_hp - p.hp, random.randint(5, 12))
-        p.hp += heal
-        context.user_data["player"] = asdict(p)
-        await update.message.reply_html(f"⛺ Ви відпочили біля вогнища та відновили {heal} HP. Тепер {p.hp}/{p.max_hp}.")
-        return ConversationHandler.END
-    else:
-        # Подія-відновлення
-        heal = min(p.max_hp - p.hp, random.randint(5, 12))
-        p.hp += heal
-        context.user_data["player"] = asdict(p)
-        await update.message.reply_html(f"⛺ Ви відпочили біля вогнища та відновили {heal} HP. Тепер {p.hp}/{p.max_hp}.")
-        return ConversationHandler.END
-    else:
-        # Подія-відновлення
-        heal = min(p.max_hp - p.hp, random.randint(5, 12))
-        p.hp += heal
-        context.user_data["player"] = asdict(p)
-        await update.message.reply_html(f"⛺ Ви відпочили біля вогнища та відновили {heal} HP. Тепер {p.hp}/{p.max_hp}.")
-        return ConversationHandler.END
+        text = f"🎒 Інвентар:\n🧪 Зілля: {player.potions}\n💰 Золото: {player.gold}\n{items}"
+    await update.message.reply_html(text)
 
-# ----------------------------- БИТВА: ХОД ГРАВЦЯ -----------------------------
-async def on_battle_action(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+
+# ----------------------------- ЛОКАЦІЇ ТА МАГАЗИН -----------------------------
+
+LOCATIONS = ["Місто", "Тракт", "Руїни"]
+SHOP_ITEMS = [
+    {"id": "potion", "name": "Зілля лікування", "price": 12, "info": "Відновлює 12 HP"},
+    {"id": "upgrade_weapon", "name": "Полірований клинок", "price": 30, "info": "+1 атака"},
+]
+
+
+async def travel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    buttons = [
+        [InlineKeyboardButton(loc, callback_data=f"travel:{loc}")]
+        for loc in LOCATIONS
+    ]
+    markup = InlineKeyboardMarkup(buttons)
+    await update.message.reply_text("Оберіть локацію для подорожі:", reply_markup=markup)
+
+
+async def on_travel_select(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
+    _, location = query.data.split(":", 1)
+    context.user_data["location"] = location
+    await query.edit_message_text(f"🧭 Ви вирушили до локації <b>{location}</b>.", parse_mode=ParseMode.HTML)
 
-    p = dict_to_player(context.user_data.get("player"))
-    e = dict_to_enemy(context.user_data.get("enemy"))
 
-    action = query.data
-    context.user_data["defending"] = False
-    text = ""
+async def shop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    buttons = [
+        [InlineKeyboardButton(f"Купити: {item['name']} — {item['price']} золота", callback_data=f"shop:{item['id']}")]
+        for item in SHOP_ITEMS
+    ]
+    markup = InlineKeyboardMarkup(buttons)
+    info = "\n".join(f"• {item['name']}: {item['info']}" for item in SHOP_ITEMS)
+    await update.message.reply_html(f"🛒 <b>Лавка</b>:\n{info}", reply_markup=markup)
 
-    if action == "attack":
-        dmg = roll_damage(p.atk, e.defense)
-        e.hp -= dmg
-        text = f"⚔️ Ви вдарили {e.name} на {dmg} шкоди."
-    elif action == "defend":
-        context.user_data["defending"] = True
-        text = "🛡️ Ви у стійці захисту — шкода цього ходу по вам зменшена вдвічі."
-    elif action == "skill":
-        # Просте вміння: потужний удар з кд 3 ходи (спрощено: без кд для демо)
-        dmg = roll_damage(p.atk + 3, e.defense)
-        e.hp -= dmg
-        text = f"✨ Ви застосували вміння: Потужний удар! {e.name} отримує {dmg} шкоди."
-    elif action == "potion":
-        healed = p.heal()
-        context.user_data["player"] = asdict(p)
-        if healed == 0:
-            text = "🧪 Зілля відсутні або HP повне. Хід втрачено."
-        else:
-            text = f"🧪 Ви випили зілля та відновили {healed} HP. ({p.hp}/{p.max_hp})"
-    elif action == "run":
-        if random.random() < 0.5:
-            await query.edit_message_text("🏃 Ви успішно втекли від бою.")
-            return ConversationHandler.END
-        else:
-            text = "❌ Втекти не вдалося!"
 
-    # Перевірка смерті ворога
-    if e.hp <= 0:
-        reward_exp = e.exp_reward
-        reward_gold = e.gold_reward
-        lvl_before = p.level
-        level, leveled = p.gain_exp(reward_exp)
-        p.gold += reward_gold
-        context.user_data["player"] = asdict(p)
-        context.user_data.pop("enemy", None)
-        summary = (
-            f"💀 {e.name} переможений!\n"
-            f"+{reward_exp} EXP, +{reward_gold} золота.\n"
-        )
-        if leveled:
-            summary += f"⬆️ Рівень підвищено до {level}! HP/Атака/Захист зросли, HP відновлено до {p.max_hp}."
-        await query.edit_message_text(
-            text + "\n\n" + summary,
-            reply_markup=battle_keyboard(in_battle=False),
-        )
-        return LOOTING
+async def on_shop_action(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    item_id = query.data.split(":", 1)[1]
+    player = ensure_player(context.user_data)
 
-    # Оновлюємо ворога й переходимо до ходу ворога
-    context.user_data["enemy"] = e.__dict__
+    item = next((it for it in SHOP_ITEMS if it["id"] == item_id), None)
+    if not item:
+        await query.edit_message_text("Товар не знайдено.")
+        return
 
-    status = (
-        f"<b>{p.name}</b> HP: {p.hp}/{p.max_hp}\n"
-        f"<b>{e.name}</b> HP: {e.hp}/{e.max_hp}"
+    if player.gold < item["price"]:
+        await query.answer("Не вистачає золота", show_alert=True)
+        return
+
+    player.gold -= item["price"]
+    if item_id == "potion":
+        player.potions += 1
+        feedback = "Ви купили зілля лікування."
+    elif item_id == "upgrade_weapon":
+        player.atk += 1
+        player.upgrades["weapon"] = player.upgrades.get("weapon", 0) + 1
+        feedback = "Ваш меч гостріший! Атака +1."
+    else:
+        feedback = "Товар додано до інвентарю."
+
+    context.user_data["player"] = asdict(player)
+    await query.edit_message_text(f"🛒 {feedback}\nЗалишок золота: {player.gold}")
+
+
+# ----------------------------- КВЕСТ -----------------------------
+
+QUESTS = {
+    "hunt": {
+        "title": "Полювання на гобліна",
+        "reward_exp": 12,
+        "reward_gold": 10,
+    },
+    "scout": {
+        "title": "Розвідка руїн",
+        "reward_exp": 16,
+        "reward_gold": 14,
+    },
+}
+
+
+async def quest(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if context.user_data.get("quest"):
+        await update.message.reply_text("У вас вже є активний квест. Виконайте його під час бою!")
+        return
+    buttons = [
+        [InlineKeyboardButton(data["title"], callback_data=f"quest:{qid}")]
+        for qid, data in QUESTS.items()
+    ]
+    await update.message.reply_text(
+        "Оберіть квест:", reply_markup=InlineKeyboardMarkup(buttons)
     )
+
+
+async def on_quest_action(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    quest_id = query.data.split(":", 1)[1]
+    quest_data = QUESTS.get(quest_id)
+    if not quest_data:
+        await query.edit_message_text("Квест не знайдено.")
+        return
+    context.user_data["quest"] = quest_id
     await query.edit_message_text(
-        text + "\n\n" + status + "\n\nХід ворога...",
+        f"📜 Ви взяли квест: <b>{quest_data['title']}</b>. Перемагайте ворогів під час пригод!",
         parse_mode=ParseMode.HTML,
     )
-    return await enemy_turn(update, context)
 
-# ----------------------------- БИТВА: ХІД ВОРОГА -----------------------------
-async def enemy_turn(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    # Викликається або з on_battle_action, або напряму (для цілісності)
-    p = dict_to_player(context.user_data.get("player"))
-    e = dict_to_enemy(context.user_data.get("enemy"))
 
-    if not e.is_alive():
-        return LOOTING
+# ----------------------------- ДОСЛІДЖЕННЯ/ПРИГОДА -----------------------------
 
-    # Імовірність особливої атаки 20%
-    special = random.random() < 0.2
-    atk = e.atk + (3 if special else 0)
-    dmg = roll_damage(atk, p.defense)
 
-    if context.user_data.get("defending"):
-        dmg = def get_location(user_data: Dict[str, Any]) -> str:
+def get_location(user_data: Dict[str, Any]) -> str:
     return user_data.get("location", "Тракт")
 
 
-def spawn_enemy_for(p: Player, location: str = "Тракт") -> Enemy:
-    # Шаблони залежать від локації
-    tables = {
+def spawn_enemy_for(player: Player, location: str = "Тракт") -> Enemy:
+    tables: Dict[str, Iterable[tuple[str, int, int, int, int, int]]] = {
         "Місто": [
             ("П'яний хуліган", 18, 5, 1, 10, 8),
             ("Кишеньковий злодій", 20, 6, 2, 12, 12),
@@ -383,19 +384,25 @@ def spawn_enemy_for(p: Player, location: str = "Тракт") -> Enemy:
             ("Рицар-відступник", 32, 10, 4, 26, 24),
         ],
     }
-    templates = tables.get(location, tables["Тракт"])
+    templates = list(tables.get(location, tables["Тракт"]))
     name, base_hp, base_atk, base_def, exp, gold = random.choice(templates)
-    hp = base_hp + (p.level - 1) * 4
-    atk = base_atk + (p.level - 1)
-    defense = base_def + (p.level // 3)
-    exp_reward = exp + (p.level - 1) * 3
-    gold_reward = gold + random.randint(0, p.level * 2)
+    hp = base_hp + (player.level - 1) * 4
+    atk = base_atk + (player.level - 1)
+    defense = base_def + (player.level // 3)
+    exp_reward = exp + (player.level - 1) * 3
+    gold_reward = gold + random.randint(0, player.level * 2)
     return Enemy(
-        name=name, hp=hp, max_hp=hp, atk=atk, defense=defense,
-        exp_reward=exp_reward, gold_reward=gold_reward
-    )---------# ----------------------------- ЛУТ (РІДКІСНІСТЬ) -----------------------------
+        name=name,
+        hp=hp,
+        max_hp=hp,
+        atk=atk,
+        defense=defense,
+        exp_reward=exp_reward,
+        gold_reward=gold_reward,
+    )
 
-def generate_loot(location: str) -> dict:
+
+def generate_loot(location: str) -> Dict[str, Any]:
     roll = random.random()
     if roll < 0.60:
         rarity, title, emoji, gold = "common", "⚪ Звичайний", "⚪", random.randint(3, 8)
@@ -414,82 +421,193 @@ def generate_loot(location: str) -> dict:
     name = random.choice(names_by_loc.get(location, names_by_loc["Тракт"]))
     return {"name": name, "rarity": rarity, "title": title, "emoji": emoji, "gold": gold}
 
-# ----------------------------- ГЕНЕРАЦІЯ ВОРОГІВ -----------------------------int:
+
+async def explore(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    player = ensure_player(context.user_data)
+    location = get_location(context.user_data)
+
+    roll = random.random()
+    if roll < 0.6:
+        enemy = spawn_enemy_for(player, location)
+        context.user_data["enemy"] = asdict(enemy)
+        context.user_data["defending"] = False
+        if update.message:
+            await update.message.reply_html(
+                f"🔪 [{location}] Ви натрапили на <b>{enemy.name}</b>!\n"
+                f"HP ворога: {enemy.hp}/{enemy.max_hp}",
+                reply_markup=battle_keyboard(True),
+            )
+        return CHOOSING_ACTION
+    elif roll < 0.85:
+        item = generate_loot(location)
+        player.inventory.append(item)
+        player.gold += item.get("gold", 0)
+        context.user_data["player"] = asdict(player)
+        extra = f" (+{item['gold']} золота)" if item.get("gold") else ""
+        if update.message:
+            await update.message.reply_html(
+                f"🧰 Знахідка у локації <b>{location}</b>: {item['emoji']} <b>{item['name']}</b> — {item['title']}{extra}!"
+            )
+        return ConversationHandler.END
+    else:
+        heal = min(player.max_hp - player.hp, random.randint(5, 12))
+        player.hp += heal
+        context.user_data["player"] = asdict(player)
+        if update.message:
+            await update.message.reply_html(
+                f"⛺ Ви відпочили біля вогнища та відновили {heal} HP. Тепер {player.hp}/{player.max_hp}."
+            )
+        return ConversationHandler.END
+
+
+# ----------------------------- БИТВА: ХІД ГРАВЦЯ -----------------------------
+
+
+async def on_battle_action(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+
+    player = dict_to_player(context.user_data.get("player"))
+    enemy = dict_to_enemy(context.user_data.get("enemy"))
+
+    action = query.data
+    context.user_data["defending"] = False
+    text = ""
+
+    if action == "attack":
+        dmg = roll_damage(player.atk, enemy.defense)
+        enemy.hp -= dmg
+        text = f"⚔️ Ви вдарили {enemy.name} на {dmg} шкоди."
+    elif action == "defend":
+        context.user_data["defending"] = True
+        text = "🛡️ Ви у стійці захисту — шкода цього ходу по вам зменшена вдвічі."
+    elif action == "skill":
+        dmg = roll_damage(player.atk + 3, enemy.defense)
+        enemy.hp -= dmg
+        text = f"✨ Ви застосували вміння: Потужний удар! {enemy.name} отримує {dmg} шкоди."
+    elif action == "potion":
+        healed = player.heal()
+        if healed == 0:
+            text = "🧪 Зілля відсутні або HP повне. Хід втрачено."
+        else:
+            text = f"🧪 Ви випили зілля та відновили {healed} HP. ({player.hp}/{player.max_hp})"
+    elif action == "run":
+        if random.random() < 0.5:
+            await query.edit_message_text("🏃 Ви успішно втекли від бою.")
+            context.user_data.pop("enemy", None)
+            context.user_data["player"] = asdict(player)
+            return ConversationHandler.END
+        text = "❌ Втекти не вдалося!"
+
+    if not enemy.is_alive():
+        reward_exp = enemy.exp_reward
+        reward_gold = enemy.gold_reward
+        level_before = player.level
+        level, leveled = player.gain_exp(reward_exp)
+        player.gold += reward_gold
+        quest_id = context.user_data.pop("quest", None)
+        if quest_id:
+            quest_data = QUESTS.get(quest_id)
+            if quest_data:
+                player.gold += quest_data["reward_gold"]
+                player.exp += quest_data["reward_exp"]
+                level, leveled2 = player.gain_exp(0)
+                leveled = leveled or leveled2
+                text += (
+                    "\n\n📜 Квест виконано! Нагорода: "
+                    f"+{quest_data['reward_exp']} EXP, +{quest_data['reward_gold']} золота."
+                )
+        context.user_data["player"] = asdict(player)
+        context.user_data.pop("enemy", None)
+        summary = (
+            f"💀 {enemy.name} переможений!\n"
+            f"+{reward_exp} EXP, +{reward_gold} золота.\n"
+        )
+        if leveled:
+            summary += (
+                f"⬆️ Рівень підвищено до {level}! HP/Атака/Захист зросли, HP відновлено до {player.max_hp}."
+            )
+        await query.edit_message_text(
+            text + "\n\n" + summary,
+            reply_markup=battle_keyboard(in_battle=False),
+            parse_mode=ParseMode.HTML,
+        )
+        return LOOTING
+
+    context.user_data["enemy"] = asdict(enemy)
+    context.user_data["player"] = asdict(player)
+
+    status = (
+        f"<b>{player.name}</b> HP: {player.hp}/{player.max_hp}\n"
+        f"<b>{enemy.name}</b> HP: {enemy.hp}/{enemy.max_hp}"
+    )
+    await query.edit_message_text(
+        text + "\n\n" + status + "\n\nХід ворога...",
+        parse_mode=ParseMode.HTML,
+    )
+    return await enemy_turn(update, context)
+
+
+# ----------------------------- БИТВА: ХІД ВОРОГА -----------------------------
+
+
+async def enemy_turn(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    player = dict_to_player(context.user_data.get("player"))
+    enemy = dict_to_enemy(context.user_data.get("enemy"))
+
+    if not enemy.is_alive():
+        return LOOTING
+
+    special = random.random() < 0.2
+    atk = enemy.atk + (3 if special else 0)
+    dmg = roll_damage(atk, player.defense)
+
+    if context.user_data.get("defending"):
+        dmg = max(1, dmg // 2)
+
+    player.hp -= dmg
+    context.user_data["player"] = asdict(player)
+
+    if player.hp <= 0:
+        context.user_data.pop("enemy", None)
+        await update.callback_query.edit_message_text(
+            f"💀 {enemy.name} завдає {dmg} шкоди. Ви повалені...",
+            parse_mode=ParseMode.HTML,
+        )
+        return ConversationHandler.END
+
+    text = f"{enemy.name} завдає {dmg} шкоди." + (" Особлива атака!" if special else "")
+    status = (
+        f"<b>{player.name}</b> HP: {player.hp}/{player.max_hp}\n"
+        f"<b>{enemy.name}</b> HP: {enemy.hp}/{enemy.max_hp}"
+    )
+    await update.callback_query.edit_message_text(
+        text + "\n\n" + status,
+        parse_mode=ParseMode.HTML,
+        reply_markup=battle_keyboard(True),
+    )
+    return CHOOSING_ACTION
+
+
+# ----------------------------- ПІСЛЯ ЛУТУ -----------------------------
+
+
+async def after_loot(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     if query:
         await query.answer()
         await query.edit_message_text("➡️ Продовжуємо пригоду! Використайте /explore.")
-    else:
-        await update.message.reply_text("➡️ Продовжуємо пригоду! Використайте /explore.")
     return ConversationHandler.END
 
-# ----------------------------- ЛУТ (РІДКІСНІСТЬ) -----------------------------
 
-def generate_loot(location: str) -> dict:
-    roll = random.random()
-    if roll < 0.60:
-        rarity, title, emoji, gold = "common", "⚪ Звичайний", "⚪", random.randint(3, 8)
-    elif roll < 0.85:
-        rarity, title, emoji, gold = "uncommon", "🟢 Незвичайний", "🟢", random.randint(6, 14)
-    elif roll < 0.97:
-        rarity, title, emoji, gold = "rare", "🔵 Рідкісний", "🔵", random.randint(10, 22)
-    else:
-        rarity, title, emoji, gold = "epic", "🟣 Епічний", "🟣", random.randint(18, 35)
-
-    names_by_loc = {
-        "Місто": ["Кишеньковий амулет", "Гільдійський жетон", "Срібний перстень"],
-        "Тракт": ["Моховитий талісман", "Клинок мандрівника", "Шкіряний тубус"],
-        "Руїни": ["Осколок руни", "Іржавий герб", "Кістяний оберіг"],
-    }
-    name = random.choice(names_by_loc.get(location, names_by_loc["Тракт"]))
-    return {"name": name, "rarity": rarity, "title": title, "emoji": emoji, "gold": gold}
-
-# ----------------------------- ГЕНЕРАЦІЯ ВОРОГІВ -----------------------------
-
-def get_location(user_data: Dict[str, Any]) -> str:
-    return user_data.get("location", "Тракт")
+# ----------------------------- UNKNOWN -----------------------------
 
 
-def spawn_enemy_for(p: Player, location: str = "Тракт") -> Enemy:
-    # Шаблони залежать від локації
-    tables = {
-        "Місто": [
-            ("П'яний хуліган", 18, 5, 1, 10, 8),
-            ("Кишеньковий злодій", 20, 6, 2, 12, 12),
-            ("Шибайголова", 22, 7, 2, 14, 14),
-        ],
-        "Тракт": [
-            ("Гоблін-набігник", 18, 5, 1, 12, 10),
-            ("Вовк лісовий", 20, 6, 2, 14, 12),
-            ("Розбійник тракту", 24, 8, 3, 18, 16),
-        ],
-        "Руїни": [
-            ("Кістянapp.add_handler(CommandHandler("inventory", inventory))
-    app.add_handler(CommandHandler("shop", shop))
-    app.add_handler(CommandHandler("travel", travel))
-    app.add_handler(CommandHandler("quest", quest))ерк", 28, 9, 3, 22, 20),
-            ("Рицар-відступник", 32, 10, 4, 26, 24),
-        ],
-    }
-    templates = tables.get(location, tables["Тракт"])
-    name, base_hp, base_atk, base_def, exp, gold = random.choice(templates)
-    hp = base_hp + (p.level - 1) * 4
-    atk = base_atk + (p.level - 1)
-    defense = base_def + (p.level // 3)
-    exp_reward = exp + (p.level - 1) * 3
-    gold_reward = gold + random.randint(0, p.level * 2)
-    return Enemy(
-        name=name, hp=hp, max_hp=hp, atk=atk, defense=defense,
-        exp_reward=exp_reward, gold_reward=gold_reward
-    )
-
-# ----------------------------- MAIN ---------app.add_handler(battle_conv)
-
-    # Кнопкові обробники магазину/подорожей/квестів
-    app.add_handler(CallbackQueryHandler(on_shop_action, pattern=r"^shop:"))
-    app.add_handler(CallbackQueryHandler(on_travel_select, pattern=r"^travel:"))
-    app.add_handler(CallbackQueryHandler(on_quest_action, pattern=r"^quest:"))ef on_unknown(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def on_unknown(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text("Нерозпізнана команда. Спробуйте /help")
+
+
+# ----------------------------- APP BUILDER -----------------------------
 
 
 def build_app() -> Application:
@@ -500,7 +618,6 @@ def build_app() -> Application:
     persistence = PicklePersistence(filepath="rpgbot.pickle")
     app = ApplicationBuilder().token(token).persistence(persistence).build()
 
-    # Статичні команди
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(CommandHandler("newgame", newgame))
@@ -510,13 +627,12 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("travel", travel))
     app.add_handler(CommandHandler("quest", quest))
 
-    # Дослідження/битва як розмова
     battle_conv = ConversationHandler(
         entry_points=[CommandHandler("explore", explore)],
         states={
             CHOOSING_ACTION: [CallbackQueryHandler(on_battle_action)],
-            ENEMY_TURN: [],  # переходимо через enemy_turn()
-            LOOTING: [CallbackQueryHandler(after_loot)],
+            ENEMY_TURN: [],
+            LOOTING: [CallbackQueryHandler(after_loot, pattern="^continue$")],
         },
         fallbacks=[CommandHandler("stats", stats)],
         name="battle_conv",
@@ -524,12 +640,10 @@ def build_app() -> Application:
     )
     app.add_handler(battle_conv)
 
-    # Кнопкові обробники магазину/подорожей/квестів
     app.add_handler(CallbackQueryHandler(on_shop_action, pattern=r"^shop:"))
     app.add_handler(CallbackQueryHandler(on_travel_select, pattern=r"^travel:"))
     app.add_handler(CallbackQueryHandler(on_quest_action, pattern=r"^quest:"))
 
-    # Unknown
     app.add_handler(MessageHandler(filters.COMMAND, on_unknown))
 
     return app
@@ -538,7 +652,7 @@ def build_app() -> Application:
 async def main() -> None:
     app = build_app()
 
-    webhook_url = os.getenv("WEBHOOK_URL")  # наприклад: https://your-app.onrender.com
+    webhook_url = os.getenv("WEBHOOK_URL")
     port = int(os.getenv("PORT", "10000"))
     url_path = os.getenv("WEBHOOK_PATH", os.getenv("BOT_TOKEN"))
 
