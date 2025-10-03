@@ -1,0 +1,2 @@
+python-telegram-bot[webhooks]==20.*
+httpx==0.26.*
