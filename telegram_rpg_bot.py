@@ -303,11 +303,13 @@ async def enemy_turn(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     p.hp -= dmg
     context.user_data["player"] = asdict(p)
 
+    attack_phrase = "завдає критичної атаки" if special else "б'є"
     action_text = (
-        f"🧟‍♂️ {e.name} {'завдає критичної атаки' if special else 'б'є'} на {dmg} шкоди!\n"
+        f"🧟‍♂️ {e.name} {attack_phrase} на {dmg} шкоди!\n"
         f"<b>{p.name}</b> HP: {p.hp}/{p.max_hp}\n"
         f"<b>{e.name}</b> HP: {e.hp}/{e.max_hp}"
     )
+
 
     if p.hp <= 0:
         context.user_data.pop("enemy", None)
