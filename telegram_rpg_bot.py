@@ -9,11 +9,12 @@
 - Простий баланс і приклад розширюваної архітектури
 
 Запуск:
-1) Встановіть залежності:  pip install python-telegram-bot==20.*
-2) Встановіть токен бота:  setx BOT_TOKEN "123:ABC"  (Windows) або  export BOT_TOKEN="123:ABC" (Linux/macOS)
-3) Запустіть:  python telegram_rpg_bot.py
+1) pip install python-telegram-bot==20.*
+2) BOT_TOKEN=...  (setx на Windows або export на Linux/macOS)
+3) python telegram_rpg_bot.py
 
-Порада: спочатку використовується Long Polling. Для продакшену на вебхуках додайте WebhookApp/Flask.
+Локально працює Long Polling.
+На Render — Webhook, якщо задано WEBHOOK_URL (root URL сервісу).
 """
 from __future__ import annotations
 
@@ -22,9 +23,9 @@ import logging
 import os
 import random
 from dataclasses import dataclass, asdict
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, Tuple  # Optional не потрібен
 
-# Назва бота для відображення у повідомленнях (можна перевизначити змінною оточення BOT_DISPLAY_NAME)
+# Назва бота у повідомленнях (можна перевизначити змінною BOT_DISPLAY_NAME)
 BOT_DISPLAY_NAME = os.getenv("BOT_DISPLAY_NAME", "RPG0")
 
 from telegram import (
@@ -87,7 +88,7 @@ class Player:
             self.exp -= self._exp_to_next()
             self.level += 1
             leveled = True
-            # Невелике посилення при підвищенні рівня
+            # Підвищення параметрів
             self.max_hp += 5
             self.atk += 2
             self.defense += 1
@@ -112,30 +113,25 @@ class Enemy:
         return self.hp > 0
 
 # ----------------------------- УТИЛІТИ -----------------------------
-
 def ensure_player(user_data: Dict[str, Any]) -> Player:
     if "player" not in user_data:
         user_data["player"] = asdict(Player())
-    # Збережено як dict для PicklePersistence дружності
-    p = dict_to_player(user_data["player"]) 
+    # Тримаємо у user_data словник (сумісність із PicklePersistence)
+    p = dict_to_player(user_data["player"])
     user_data["player"] = asdict(p)
     return p
-
 
 def dict_to_player(d: Dict[str, Any]) -> Player:
     return Player(**d)
 
-
 def dict_to_enemy(d: Dict[str, Any]) -> Enemy:
     return Enemy(**d)
-
 
 def roll_damage(atk: int, defense: int) -> int:
     base = max(0, atk - defense)
     variance = random.randint(-2, 2)
     dmg = max(1, base + variance)
     return dmg
-
 
 def battle_keyboard(in_battle: bool = True) -> InlineKeyboardMarkup:
     if in_battle:
@@ -150,7 +146,6 @@ def battle_keyboard(in_battle: bool = True) -> InlineKeyboardMarkup:
         buttons = [[InlineKeyboardButton("➡️ Продовжити", callback_data="continue")]]
     return InlineKeyboardMarkup(buttons)
 
-
 def format_stats(p: Player) -> str:
     return (
         f"<b>{p.name}</b> — рівень {p.level}\n"
@@ -160,21 +155,14 @@ def format_stats(p: Player) -> str:
 
 # ----------------------------- КОМАНДИ -----------------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    p = ensure_player(context.user_data)
+    ensure_player(context.user_data)
     welcome = (
-        f"👋 Вас вітає <b>{BOT_DISPLAY_NAME}</b> — покрокова RPG у сеттингу середньовічного фентезі!
-
-"
-        "Команди:
-"
-        "/newgame — почати нову гру (скидає прогрес)
-"
-        "/stats — характеристики героя
-"
-        "/inventory — інвентар
-"
-        "/explore — вирушити у пригоду (шанси на бій/лут/подію)
-"
+        f"👋 Вас вітає <b>{BOT_DISPLAY_NAME}</b> — покрокова RPG у сеттингу середньовічного фентезі!\n\n"
+        "Команди:\n"
+        "/newgame — почати нову гру (скидає прогрес)\n"
+        "/stats — характеристики героя\n"
+        "/inventory — інвентар\n"
+        "/explore — вирушити у пригоду (шанси на бій/лут/подію)\n"
         "/help — довідка"
     )
     await update.message.reply_html(welcome)
@@ -245,7 +233,7 @@ async def on_battle_action(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         context.user_data["defending"] = True
         text = "🛡️ Ви у стійці захисту — шкода цього ходу по вам зменшена вдвічі."
     elif action == "skill":
-        # Просте вміння: потужний удар з кд 3 ходи (спрощено: без кд для демо)
+        # Просте вміння: потужний удар (демо)
         dmg = roll_damage(p.atk + 3, e.defense)
         e.hp -= dmg
         text = f"✨ Ви застосували вміння: Потужний удар! {e.name} отримує {dmg} шкоди."
@@ -267,7 +255,6 @@ async def on_battle_action(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if e.hp <= 0:
         reward_exp = e.exp_reward
         reward_gold = e.gold_reward
-        lvl_before = p.level
         level, leveled = p.gain_exp(reward_exp)
         p.gold += reward_gold
         context.user_data["player"] = asdict(p)
@@ -299,7 +286,6 @@ async def on_battle_action(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 # ----------------------------- БИТВА: ХІД ВОРОГА -----------------------------
 async def enemy_turn(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    # Викликається або з on_battle_action, або напряму (для цілісності)
     p = dict_to_player(context.user_data.get("player"))
     e = dict_to_enemy(context.user_data.get("enemy"))
 
@@ -323,7 +309,6 @@ async def enemy_turn(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         f"<b>{e.name}</b> HP: {e.hp}/{e.max_hp}"
     )
 
-    # Перевірка смерті гравця
     if p.hp <= 0:
         context.user_data.pop("enemy", None)
         await update.effective_message.reply_html(
@@ -331,7 +316,6 @@ async def enemy_turn(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         )
         return ConversationHandler.END
 
-    # Хід гравця знову
     await update.effective_message.reply_html(
         action_text + "\n\nВаш хід: оберіть дію.",
         reply_markup=battle_keyboard(True),
@@ -349,7 +333,6 @@ async def after_loot(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return ConversationHandler.END
 
 # ----------------------------- ГЕНЕРАЦІЯ ВОРОГІВ -----------------------------
-
 def spawn_enemy_for(p: Player) -> Enemy:
     # Прості шаблони ворогів, масштабовані за рівнем
     templates = [
@@ -367,13 +350,14 @@ def spawn_enemy_for(p: Player) -> Enemy:
     defense = base_def + (p.level // 3)
     exp_reward = exp + (p.level - 1) * 3
     gold_reward = gold + random.randint(0, p.level * 2)
-    return Enemy(name=name, hp=hp, max_hp=hp, atk=atk, defense=defense,
-                 exp_reward=exp_reward, gold_reward=gold_reward)
+    return Enemy(
+        name=name, hp=hp, max_hp=hp, atk=atk, defense=defense,
+        exp_reward=exp_reward, gold_reward=gold_reward
+    )
 
 # ----------------------------- MAIN -----------------------------
 async def on_unknown(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text("Нерозпізнана команда. Спробуйте /help")
-
 
 def build_app() -> Application:
     token = os.getenv("BOT_TOKEN")
@@ -409,20 +393,31 @@ def build_app() -> Application:
 
     return app
 
-
 async def main() -> None:
     app = build_app()
-    LOGGER.info("RPG Bot запускається у режимі Long Polling...")
-    await app.initialize()
-    await app.start()
-    try:
-        await app.updater.start_polling(drop_pending_updates=True)
-        await asyncio.Event().wait()  # безкінечне очікування
-    finally:
-        await app.updater.stop()
-        await app.stop()
-        await app.shutdown()
 
+    webhook_url = os.getenv("WEBHOOK_URL")  # наприклад: https://your-app.onrender.com
+    port = int(os.getenv("PORT", "10000"))
+    url_path = os.getenv("WEBHOOK_PATH", os.getenv("BOT_TOKEN"))
+
+    if webhook_url:
+        LOGGER.info("RPG Bot: режим Webhook (Render)...")
+        await app.initialize()
+        await app.start()
+        try:
+            await app.run_webhook(
+                listen="0.0.0.0",
+                port=port,
+                url_path=url_path,
+                webhook_url=f"{webhook_url.rstrip('/')}/{url_path}",
+                drop_pending_updates=True,
+            )
+        finally:
+            await app.stop()
+            await app.shutdown()
+    else:
+        LOGGER.info("RPG Bot: режим Long Polling (локально)...")
+        await app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     try:
