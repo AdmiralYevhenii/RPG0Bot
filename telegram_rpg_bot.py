@@ -395,7 +395,7 @@ def build_app() -> Application:
 
     return app
 
-async def main() -> None:
+def main() -> None:
     app = build_app()
 
     webhook_url = os.getenv("WEBHOOK_URL")  # наприклад: https://your-app.onrender.com
@@ -404,25 +404,17 @@ async def main() -> None:
 
     if webhook_url:
         LOGGER.info("RPG Bot: режим Webhook (Render)...")
-        await app.initialize()
-        await app.start()
-        try:
-            await app.run_webhook(
-                listen="0.0.0.0",
-                port=port,
-                url_path=url_path,
-                webhook_url=f"{webhook_url.rstrip('/')}/{url_path}",
-                drop_pending_updates=True,
-            )
-        finally:
-            await app.stop()
-            await app.shutdown()
+        app.run_webhook(
+            listen="0.0.0.0",
+            port=port,
+            url_path=url_path,
+            webhook_url=f"{webhook_url.rstrip('/')}/{url_path}",
+            drop_pending_updates=True,
+        )
     else:
         LOGGER.info("RPG Bot: режим Long Polling (локально)...")
-        await app.run_polling(drop_pending_updates=True)
+        app.run_polling(drop_pending_updates=True)
+
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except (KeyboardInterrupt, SystemExit):
-        print("Зупинено.")
+    main()
