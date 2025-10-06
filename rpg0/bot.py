@@ -30,7 +30,9 @@ def format_stats(p) -> str:
         elif r=="uncommon": inv_counts["🟢Незвичайні"]+=1
         elif r=="rare": inv_counts["🔵Рідкісні"]+=1
         elif r=="epic": inv_counts["🟣Епічні"]+=1
-        elif r=="legendary": inv_counts.setdefault("🟡Легендарні",0) or None; inv_counts["🟡Легендарні"]=inv_counts.get("🟡Легендарні",0)+1
+        elif r == "legendary":
+            inv_counts.setdefault("🟡Легендарні", 0)
+            inv_counts["🟡Легендарні"] += 1
     inv_str = ", ".join([f"{k}:{v}" for k,v in inv_counts.items() if v]) or "порожньо"
 
     eq_short = []
@@ -179,7 +181,7 @@ def build_app() -> Application:
     battle_conv = ConversationHandler(
         entry_points=[CommandHandler("explore", explore)],
         states={
-            CHOOSING_ACTION: [CallbackQueryHandler(lambda u,c: on_battle_action(u,c), pattern=r"^battle:")],
+            CHOOSING_ACTION: [CallbackQueryHandler(on_battle_action)],
             ENEMY_TURN: [],
             LOOTING: [CallbackQueryHandler(after_loot)],
         },
