@@ -1,136 +1,191 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-from telegram import InlineKeyboardMarkup, InlineKeyboardButton, Update
+
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
+
+from ..config import LOC_GUILD, SKILL_SLOT_MAX, GUILD_RESPEC_COST
 from ..models import ensure_player_ud
-from ..config import SKILL_SLOT_MAX
-from ..utils.skills import (
-    skills_for_class, pick_new_skill_options, add_to_loadout, remove_from_loadout
-)
+from ..utils.skills import CLASS_SKILLS, skill_short_desc
 
-GUILD_LOC_NAME = "Гільдія авантюристів"
 
-def _kb(rows): return InlineKeyboardMarkup(rows)
+def _kb(options, prefix):
+    return InlineKeyboardMarkup([[InlineKeyboardButton(txt, callback_data=f"{prefix}:{data}")]
+                                 for txt, data in options])
 
-def _guild_text(p) -> str:
-    known = ", ".join(p.skills_known) if p.skills_known else "— немає —"
-    load = ", ".join(p.skills_loadout) if p.skills_loadout else "— порожньо —"
-    return (f"🏛️ <b>Гільдія авантюристів</b>\n"
-            f"Клас: {p.class_name or '—'}\n"
-            f"Відомі вміння: {known}\n"
-            f"Набір (до {SKILL_SLOT_MAX}): {load}\n"
-            f"{'🆕 Доступний вибір нового вміння!' if p.pending_skill_choice else ''}")
+def _render_loadout(p):
+    load = list(getattr(p, "skills_loadout", []) or [])
+    if not load:
+        return "— не вибрано —"
+    out = []
+    for i, name in enumerate(load[:SKILL_SLOT_MAX], start=1):
+        out.append(f"{i}. <b>{name}</b> — {skill_short_desc(name)}")
+    return "\n".join(out)
+
+def _render_known(p):
+    known = list(getattr(p, "skills_known", []) or [])
+    if not known:
+        return "— немає вивчених умінь —"
+    return "\n".join([f"• <b>{s}</b> — {skill_short_desc(s)}" for s in known])
+
+def _in_guild(context) -> bool:
+    return context.user_data.get("location") == LOC_GUILD
+
 
 async def guild(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Головне меню Гільдії: вибір та керування уміннями."""
     p = ensure_player_ud(context.user_data)
-    if context.user_data.get("location") != GUILD_LOC_NAME:
+
+    if not _in_guild(context):
         await update.message.reply_html(
-            f"🏛️ Ви не в гільдії. Перейдіть у локацію “{GUILD_LOC_NAME}” через /travel."
+            f"🏛️ Ви не в <b>{LOC_GUILD}</b>. Зайдіть туди через /travel.",
         )
         return
-    await update.message.reply_html(
-        _guild_text(p),
-        reply_markup=_kb([
-            [InlineKeyboardButton("📚 Мої вміння", callback_data="guild:skills")],
-            [InlineKeyboardButton("🎒 Набір у бій", callback_data="guild:loadout")],
-            [InlineKeyboardButton("✨ Вивчити нове", callback_data="guild:learn")],
-        ])
-    )
+
+    known = getattr(p, "skills_known", []) or []
+    loadout = list(getattr(p, "skills_loadout", []) or [])
+    pending = bool(getattr(p, "pending_skill_choice", False))
+
+    text = [
+        "🏛️ <b>Гільдія авантюристів</b>",
+        "Тут ви керуєте переліком умінь і набором активних умінь у бою.",
+        "",
+        f"Активні слоти ({len(loadout)}/{SKILL_SLOT_MAX}):",
+        _render_loadout(p),
+        "",
+        "Відомі уміння:",
+        _render_known(p),
+    ]
+
+    rows = []
+    # Додати/зняти з лоадауту
+    if known:
+        rows.append([InlineKeyboardButton("➕ Додати в лоадаут", callback_data="guild:add")])
+    if loadout:
+        rows.append([InlineKeyboardButton("➖ Зняти з лоадауту", callback_data="guild:remove")])
+
+    # Навчитися новому (якщо є право вибору)
+    if pending:
+        rows.append([InlineKeyboardButton("🆕 Вивчити нове вміння", callback_data="guild:learn")])
+
+    # Скинути лоадаут (платно/за ресурс, опційно)
+    rows.append([InlineKeyboardButton(f"♻️ Скинути лоадаут (−{GUILD_RESPEC_COST}з)", callback_data="guild:respec")])
+
+    kb = InlineKeyboardMarkup(rows) if rows else None
+    await update.message.reply_html("\n".join(text), reply_markup=kb)
+
 
 async def on_guild_action(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Callback-логіка гільдії."""
     q = update.callback_query
     await q.answer()
     p = ensure_player_ud(context.user_data)
-    if context.user_data.get("location") != GUILD_LOC_NAME:
-        await q.edit_message_text("Сюди можна заходити лише перебуваючи в локації Гільдії.")
+    data = q.data  # guild:*
+
+    if not _in_guild(context):
+        await q.edit_message_text(f"Ви не в {LOC_GUILD}. Зайдіть туди через /travel.")
         return
 
-    data = q.data.split(":", 1)[1]
-
-    if data == "skills":
-        pool = skills_for_class(p.class_name)
-        lines = [f"• <b>{name}</b> (КД {spec['cd']}): {spec['desc']}" for name, spec in pool.items()]
-        await q.edit_message_text(
-            "📚 Класові вміння:\n" + ("\n".join(lines) if lines else "— немає —"),
-            parse_mode=ParseMode.HTML,
-            reply_markup=_kb([[InlineKeyboardButton("⬅️ Назад", callback_data="guild:menu")]])
-        )
-        return
-
-    if data == "loadout":
-        rows = []
-        for name in (p.skills_known or []):
-            if name not in (p.skills_loadout or []):
-                rows.append([InlineKeyboardButton(f"➕ Додати: {name}", callback_data=f"guild:add:{name}")])
-        for name in (p.skills_loadout or []):
-            rows.append([InlineKeyboardButton(f"➖ Прибрати: {name}", callback_data=f"guild:rem:{name}")])
-        await q.edit_message_text(
-            _guild_text(p), parse_mode=ParseMode.HTML,
-            reply_markup=_kb(rows or [[InlineKeyboardButton("⬅️ Назад", callback_data="guild:menu")]])
-        )
-        return
-
-    if data.startswith("add:"):
-        name = data.split(":", 1)[1]
-        ok, msg = add_to_loadout(p, name, SKILL_SLOT_MAX)
-        context.user_data["player"] = p.asdict()
-        await q.edit_message_text(
-            f"{msg}\n\n" + _guild_text(p), parse_mode=ParseMode.HTML,
-            reply_markup=_kb([[InlineKeyboardButton("⬅️ Назад", callback_data="guild:loadout")]])
-        )
-        return
-
-    if data.startswith("rem:"):
-        name = data.split(":", 1)[1]
-        ok, msg = remove_from_loadout(p, name)
-        context.user_data["player"] = p.asdict()
-        await q.edit_message_text(
-            f"{msg}\n\n" + _guild_text(p), parse_mode=ParseMode.HTML,
-            reply_markup=_kb([[InlineKeyboardButton("⬅️ Назад", callback_data="guild:loadout")]])
-        )
-        return
-
-    if data == "learn":
-        if not p.pending_skill_choice:
-            await q.edit_message_text(
-                "Наразі нові вміння не доступні. Підвищуйте рівень!",
-                reply_markup=_kb([[InlineKeyboardButton("⬅️ Назад", callback_data="guild:menu")]])
-            )
+    # Підменю додавання до лоадауту
+    if data == "guild:add":
+        known = list(getattr(p, "skills_known", []) or [])
+        loadout = list(getattr(p, "skills_loadout", []) or [])
+        free = [s for s in known if s not in loadout]
+        if not free:
+            await q.edit_message_text("Немає доступних умінь, які можна додати.", parse_mode=ParseMode.HTML)
             return
-        options = pick_new_skill_options(p)
-        if not options:
-            await q.edit_message_text(
-                "Усі вміння вашого класу вже вивчені!",
-                reply_markup=_kb([[InlineKeyboardButton("⬅️ Назад", callback_data="guild:menu")]])
-            )
-            return
-        rows = [[InlineKeyboardButton(f"Вивчити: {n}", callback_data=f"guild:take:{n}")] for n in options]
-        rows.append([InlineKeyboardButton("⬅️ Назад", callback_data="guild:menu")])
-        await q.edit_message_text("Оберіть нове вміння:", reply_markup=_kb(rows))
+        opts = [ (f"➕ {s}", f"guild:addpick:{s}") for s in free ]
+        await q.edit_message_text(
+            "Оберіть уміння для додавання до активного набору:",
+            reply_markup=_kb(opts, prefix="noop"),  # prefix ігнорується, береться data з opts
+        )
         return
 
-    if data.startswith("take:"):
-        name = data.split(":", 1)[1]
-        if name not in (p.skills_known or []):
-            p.skills_known.append(name)
+    if data.startswith("guild:addpick:"):
+        name = data.split(":", 2)[2]
+        loadout = list(getattr(p, "skills_loadout", []) or [])
+        if name in loadout:
+            await q.edit_message_text("Це уміння вже в наборі.", parse_mode=ParseMode.HTML)
+            return
+        if len(loadout) >= SKILL_SLOT_MAX:
+            await q.edit_message_text(f"Досягнуто ліміт {SKILL_SLOT_MAX} активних умінь.", parse_mode=ParseMode.HTML)
+            return
+        loadout.append(name)
+        p.skills_loadout = loadout
+        context.user_data["player"] = p.asdict()
+        await q.edit_message_text(f"✅ Додано в лоадаут: <b>{name}</b>.", parse_mode=ParseMode.HTML)
+        return
+
+    # Підменю зняття з лоадауту
+    if data == "guild:remove":
+        loadout = list(getattr(p, "skills_loadout", []) or [])
+        if not loadout:
+            await q.edit_message_text("Лоадаут порожній.", parse_mode=ParseMode.HTML)
+            return
+        opts = [ (f"➖ {s}", f"guild:rempick:{s}") for s in loadout ]
+        await q.edit_message_text(
+            "Оберіть уміння для зняття з активного набору:",
+            reply_markup=_kb(opts, prefix="noop"),
+        )
+        return
+
+    if data.startswith("guild:rempick:"):
+        name = data.split(":", 2)[2]
+        loadout = list(getattr(p, "skills_loadout", []) or [])
+        if name not in loadout:
+            await q.edit_message_text("Уміння відсутнє в наборі.", parse_mode=ParseMode.HTML)
+            return
+        loadout = [s for s in loadout if s != name]
+        p.skills_loadout = loadout
+        context.user_data["player"] = p.asdict()
+        await q.edit_message_text(f"✅ Знято з лоадауту: <b>{name}</b>.", parse_mode=ParseMode.HTML)
+        return
+
+    # Вивчення нового уміння (коли pending_skill_choice=True)
+    if data == "guild:learn":
+        cls = getattr(p, "class_name", None)
+        pool = list(CLASS_SKILLS.get(cls, []))
+        known = set(getattr(p, "skills_known", []) or [])
+        choices = [s for s in pool if s not in known]
+        if not getattr(p, "pending_skill_choice", False):
+            await q.edit_message_text("Зараз у вас немає нового вибору уміння.", parse_mode=ParseMode.HTML)
+            return
+        if not choices:
+            await q.edit_message_text("Для вашого класу нових умінь немає.", parse_mode=ParseMode.HTML)
+            p.pending_skill_choice = False
+            context.user_data["player"] = p.asdict()
+            return
+        opts = [(f"🆕 {s}", f"guild:learnpick:{s}") for s in choices[:6]]  # показуємо до 6
+        await q.edit_message_text(
+            "Оберіть нове уміння для вивчення:",
+            reply_markup=_kb(opts, prefix="noop"),
+        )
+        return
+
+    if data.startswith("guild:learnpick:"):
+        name = data.split(":", 2)[2]
+        known = list(getattr(p, "skills_known", []) or [])
+        if name in known:
+            await q.edit_message_text("Це уміння вже відоме.", parse_mode=ParseMode.HTML)
+            return
+        known.append(name)
+        p.skills_known = known
         p.pending_skill_choice = False
         context.user_data["player"] = p.asdict()
-        await q.edit_message_text(
-            f"🎉 Вивчено нове вміння: <b>{name}</b>\n\n" + _guild_text(p),
-            parse_mode=ParseMode.HTML,
-            reply_markup=_kb([[InlineKeyboardButton("Додати в набір", callback_data=f"guild:add:{name}")],
-                              [InlineKeyboardButton("⬅️ Назад", callback_data="guild:menu")]])
-        )
+        await q.edit_message_text(f"🎓 Вивчено нове уміння: <b>{name}</b>!", parse_mode=ParseMode.HTML)
         return
 
-    if data == "menu":
-        await q.edit_message_text(
-            _guild_text(p), parse_mode=ParseMode.HTML,
-            reply_markup=_kb([
-                [InlineKeyboardButton("📚 Мої вміння", callback_data="guild:skills")],
-                [InlineKeyboardButton("🎒 Набір у бій", callback_data="guild:loadout")],
-                [InlineKeyboardButton("✨ Вивчити нове", callback_data="guild:learn")],
-            ])
-        )
+    # Скидання лоадауту за золото
+    if data == "guild:respec":
+        if p.gold < GUILD_RESPEC_COST:
+            await q.edit_message_text("Недостатньо золота для скидання лоадауту.", parse_mode=ParseMode.HTML)
+            return
+        p.gold -= GUILD_RESPEC_COST
+        p.skills_loadout = []
+        context.user_data["player"] = p.asdict()
+        await q.edit_message_text("♻️ Лоадаут скинуто. Ви можете знову обрати уміння.", parse_mode=ParseMode.HTML)
         return
+
+    # Фолбек
+    await q.edit_message_text("Невідома дія гільдії.")

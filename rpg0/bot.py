@@ -25,6 +25,8 @@ from .handlers.travel import travel, on_travel_select
 from .handlers.quest import quest, on_quest_action
 from .handlers.inventory import inventory, on_inv_action
 from .utils.loot import generate_loot
+from .handlers.guild import guild, on_guild_action
+
 
 LOGGER = logging.getLogger("RPG")
 
@@ -196,6 +198,9 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("travel", travel))
     app.add_handler(CommandHandler("quest", quest))
     app.add_handler(CommandHandler("register", register))
+    app.add_handler(CommandHandler("guild", guild))            
+
+    app.add_handler(CallbackQueryHandler(on_guild_action, pattern=r"^guild:")) 
 
     # Інвентар callbacks
     app.add_handler(CallbackQueryHandler(on_inv_action, pattern=r"^inv:"))
