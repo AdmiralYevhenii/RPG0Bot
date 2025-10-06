@@ -7,6 +7,7 @@ from telegram.constants import ParseMode
 from telegram.ext import ContextTypes, ConversationHandler
 
 from ..models import dict_to_player, dict_to_enemy
+
 # Стани розмови
 CHOOSING_ACTION, ENEMY_TURN, LOOTING = range(3)
 
@@ -29,35 +30,42 @@ def roll_player_attack(atk: int, defense: int) -> tuple[int, bool]:
 # ----- Клавіатура -----
 
 def battle_keyboard(p=None, in_battle: bool = True, battle_state: dict | None = None) -> InlineKeyboardMarkup:
+    """
+    Під час бою всі callback_data мають префікс 'battle:'.
+    Після бою повертаємо одну кнопку 'continue' (без префікса) — її ловить LOOTING handler з pattern="^continue$".
+    """
     if not in_battle:
         return InlineKeyboardMarkup([[InlineKeyboardButton("➡️ Продовжити", callback_data="continue")]])
 
     rows = [
-        [InlineKeyboardButton("⚔️ Атака", callback_data="battle:attack"),
-         InlineKeyboardButton("🛡️ Захист", callback_data="battle:defend")]
-        [InlineKeyboardButton("✨ Вміння",   callback_data="skill"),
-         InlineKeyboardButton("🧪 Зілля",    callback_data="potion")],
-        [InlineKeyboardButton("🏃 Втекти",   callback_data="run")],
+        [
+            InlineKeyboardButton("⚔️ Атака",  callback_data="battle:attack"),
+            InlineKeyboardButton("🛡️ Захист", callback_data="battle:defend"),
+        ],
+        [
+            InlineKeyboardButton("🧪 Зілля",  callback_data="battle:potion"),
+            InlineKeyboardButton("🏃 Втекти", callback_data="battle:run"),
+        ],
     ]
-    # Кнопки умінь із КД (до 3)
+
+    # Кнопки умінь із КД (до 3), усі з префіксом battle:
     if p:
         cds = (battle_state or {}).get("cooldowns", {})
         line = []
-        for name in (p.skills_loadout or [])[:3]:
+        for name in (getattr(p, "skills_loadout", []) or [])[:3]:
             cd = cds.get(name, 0)
-            label = f"✨ {name}{' ['+str(cd)+']' if cd>0 else ''}"
+            label = f"✨ {name}{' ['+str(cd)+']' if cd > 0 else ''}"
             line.append(InlineKeyboardButton(label, callback_data=f"battle:skill:{name}"))
             if len(line) == 2:
-                rows.append(line); line = []
+                rows.append(line)
+                line = []
         if line:
             rows.append(line)
 
-    rows.append([InlineKeyboardButton("🧪 Зілля", callback_data="battle:potion"),
-                 InlineKeyboardButton("🏃 Втекти", callback_data="battle:run")])
     return InlineKeyboardMarkup(rows)
 
 
-# ----- Ход гравця -----
+# ----- Хід гравця -----
 
 async def on_battle_action(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
@@ -67,8 +75,10 @@ async def on_battle_action(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     e = dict_to_enemy(context.user_data.get("enemy"))
     battle_state = context.user_data.setdefault("battle", {"cooldowns": {}, "e_status": {}, "p_status": {}})
 
-    data = query.data  # battle:attack / battle:defend / battle:skill:<name> / battle:potion / battle:run
-    action = data.split(":", 2)[1] if ":" in data else data
+    data = query.data  # "battle:attack" / "battle:defend" / "battle:skill:<name>" / "battle:potion" / "battle:run"
+    parts = data.split(":", 2)
+    action = parts[1] if len(parts) > 1 else data
+
     context.user_data["defending"] = False
     text = ""
 
@@ -87,8 +97,7 @@ async def on_battle_action(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         turn_tick_cooldowns(battle_state)
 
     elif action == "skill":
-        # skill name у третій частині
-        sname = data.split(":", 2)[2]
+        sname = parts[2] if len(parts) > 2 else ""
         from ..utils.skills import apply_skill, turn_tick_cooldowns
         text = apply_skill(p, e, sname, battle_state)
         turn_tick_cooldowns(battle_state)
@@ -105,6 +114,9 @@ async def on_battle_action(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     elif action == "run":
         if random.random() < 0.5:
+            # Скидаємо стан бою
+            context.user_data.pop("enemy", None)
+            context.user_data.pop("battle", None)
             await query.edit_message_text("🏃 Ви успішно втекли від бою.")
             return ConversationHandler.END
         else:
@@ -116,17 +128,17 @@ async def on_battle_action(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if e.hp <= 0:
         reward_exp = e.exp_reward
         reward_gold = e.gold_reward
-        level_before = p.level
         level, leveled = p.gain_exp(reward_exp)
         p.gold += reward_gold
+
         context.user_data["player"] = p.asdict()
         context.user_data.pop("enemy", None)
-        context.user_data.pop("battle", None)  # закрити стан бою
+        context.user_data.pop("battle", None)  # закриваємо стан бою
 
         summary = f"💀 {e.name} переможений!\n+{reward_exp} EXP, +{reward_gold} золота.\n"
         if leveled:
             summary += f"⬆️ Рівень підвищено до {level}! HP/Атака/Захист зросли, HP відновлено до {p.max_hp}."
-            if p.pending_skill_choice:
+            if getattr(p, "pending_skill_choice", False):
                 summary += "\n🆕 Доступний вибір нового вміння у Гільдії (/guild)."
 
         await query.edit_message_text(
@@ -138,8 +150,10 @@ async def on_battle_action(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     # Оновити ворога, перейти до ходу ворога
     context.user_data["enemy"] = e.__dict__
-    status = (f"<b>{p.name}</b> HP: {p.hp}/{p.max_hp}\n"
-              f"<b>{e.name}</b> HP: {e.hp}/{e.max_hp}")
+    status = (
+        f"<b>{p.name}</b> HP: {p.hp}/{p.max_hp}\n"
+        f"<b>{e.name}</b> HP: {e.hp}/{e.max_hp}"
+    )
     await query.edit_message_text(
         text + "\n\n" + status + "\n\nХід ворога...",
         parse_mode=ParseMode.HTML,
@@ -162,7 +176,6 @@ async def enemy_turn(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     start_txt = apply_start_of_enemy_turn_effects(e, battle_state)
     if not e.is_alive():
         context.user_data["enemy"] = e.__dict__
-        # тікаємо КД наприкінці ходу (формально хід ворога відбувся)
         turn_tick_cooldowns(battle_state)
         await update.effective_message.reply_html(
             (start_txt + "\n" if start_txt else "") + "Ворог стік кров’ю та впав!",
@@ -171,7 +184,6 @@ async def enemy_turn(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         return LOOTING
 
     if enemy_is_stunned(battle_state):
-        # Завершити хід ворога
         context.user_data["enemy"] = e.__dict__
         turn_tick_cooldowns(battle_state)
         await update.effective_message.reply_html(
@@ -180,11 +192,11 @@ async def enemy_turn(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         )
         return CHOOSING_ACTION
 
-    # Атака ворога
+    # Базова атака ворога
     special = random.random() < 0.2
     atk = e.atk + (3 if special else 0)
 
-    # Врахувати “стійку”/деф-баф від умінь на 1 хід
+    # Врахувати тимчасовий баф захисту гравця (від умінь/стійки)
     pst = battle_state.setdefault("p_status", {})
     def_up_val = pst.get("def_up_val", 0) if pst.get("def_up") else 0
 
@@ -195,8 +207,10 @@ async def enemy_turn(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     p.hp -= dmg
     context.user_data["player"] = p.asdict()
     context.user_data["enemy"] = e.__dict__
-    # Баф захисту спрацьовує на атаку ворога і гаситься
-    pst["def_up"] = 0; pst["def_up_val"] = 0
+
+    # Баф захисту спрацьовує на один вхідний удар і гаситься
+    pst["def_up"] = 0
+    pst["def_up_val"] = 0
 
     action_text = (
         (start_txt + "\n" if start_txt else "") +
