@@ -35,6 +35,18 @@ TRAVEL_GRAPH = {
     LOC_RUINS:      [LOC_CITY, LOC_TRACT],
     LOC_OLD_FOREST: [LOC_CITY, LOC_TRACT],
 }
+# Сумісність зі старим кодом подорожей:
+ADJACENT = TRAVEL_GRAPH
+
+# Порядок відображення локацій у меню подорожей
+LOCATION_ORDER = [
+    LOC_GUILD,
+    LOC_CITY,
+    LOC_SHOP,      # магазин як кімната в Місті
+    LOC_TRACT,
+    LOC_RUINS,
+    LOC_OLD_FOREST,
+]
 
 # ---- Класи і передісторії (для реєстрації) ---------------------------------
 CLASSES = {
