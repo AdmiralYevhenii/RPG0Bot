@@ -2,6 +2,8 @@
 import logging
 from .bot import build_app
 from .config import WEBHOOK_URL, PORT, WEBHOOK_PATH
+import warnings
+warnings.filterwarnings("ignore", category=RuntimeWarning)
 
 LOGGER = logging.getLogger("RPG")
 logging.basicConfig(
