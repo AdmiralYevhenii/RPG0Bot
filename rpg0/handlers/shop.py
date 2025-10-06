@@ -6,7 +6,8 @@ from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 from ..models import ensure_player_ud
-from ..utils.loot import price_of_item, sell_value, compute_price
+from ..utils.loot import compute_price, price_of_item, sell_value
+
 
 
 def shop_stock():

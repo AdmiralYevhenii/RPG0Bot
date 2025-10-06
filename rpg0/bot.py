@@ -23,20 +23,18 @@ from .utils.loot import generate_loot
 LOGGER = logging.getLogger("RPG")
 
 def format_stats(p) -> str:
-    inv_counts = {"⚪Звичайні":0, "🟢Незвичайні":0, "🔵Рідкісні":0, "🟣Епічні":0}
+    inv_counts = {"⚪Звичайні": 0, "🟢Незвичайні": 0, "🔵Рідкісні": 0, "🟣Епічні": 0, "🟡Легендарні": 0}
     for it in p.inventory:
-        r = it.get("rarity","common")
-        if r=="common": inv_counts["⚪Звичайні"]+=1
-        elif r=="uncommon": inv_counts["🟢Незвичайні"]+=1
-        elif r=="rare": inv_counts["🔵Рідкісні"]+=1
-        elif r=="epic": inv_counts["🟣Епічні"]+=1
-        elif r == "legendary":
-            inv_counts.setdefault("🟡Легендарні", 0)
-            inv_counts["🟡Легендарні"] += 1
-    inv_str = ", ".join([f"{k}:{v}" for k,v in inv_counts.items() if v]) or "порожньо"
+        r = it.get("rarity", "common")
+        if r == "common": inv_counts["⚪Звичайні"] += 1
+        elif r == "uncommon": inv_counts["🟢Незвичайні"] += 1
+        elif r == "rare": inv_counts["🔵Рідкісні"] += 1
+        elif r == "epic": inv_counts["🟣Епічні"] += 1
+        elif r == "legendary": inv_counts["🟡Легендарні"] += 1
+    inv_str = ", ".join([f"{k}:{v}" for k, v in inv_counts.items() if v]) or "порожньо"
 
     eq_short = []
-    for slot in ("weapon","armor","accessory"):
+    for slot in ("weapon", "armor", "accessory"):
         cur = p.equipment.get(slot)
         if cur:
             eq_short.append(f"{slot}:{cur['name']}")
@@ -54,18 +52,20 @@ def format_stats(p) -> str:
 async def start(update, context: ContextTypes.DEFAULT_TYPE):
     ensure_player_ud(context.user_data)
     first = update.effective_user.first_name or "Мандрівник"
-    welcome = (f"👋 {first}, вас вітає <b>{BOT_DISPLAY_NAME}</b> — покрокова RPG у сеттингу середньовічного фентезі!\n\n"
-               "✨ Якщо ви вперше тут — зареєструйтесь у гільдії: /register\n\n"
-               "Команди:\n"
-               "/register — реєстрація в гільдії\n"
-               "/newgame — почати нову гру\n"
-               "/stats — характеристики героя\n"
-               "/inventory — інвентар\n"
-               "/explore — вирушити у пригоду\n"
-               "/travel — локації\n"
-               "/shop — крамниця\n"
-               "/quest — квести\n"
-               "/help — довідка")
+    welcome = (
+        f"👋 {first}, вас вітає <b>{BOT_DISPLAY_NAME}</b> — покрокова RPG у сеттингу середньовічного фентезі!\n\n"
+        "✨ Якщо ви вперше тут — зареєструйтесь у гільдії: /register\n\n"
+        "Команди:\n"
+        "/register — реєстрація в гільдії\n"
+        "/newgame — почати нову гру\n"
+        "/stats — характеристики героя\n"
+        "/inventory — інвентар\n"
+        "/explore — вирушити у пригоду\n"
+        "/travel — локації\n"
+        "/shop — крамниця\n"
+        "/quest — квести\n"
+        "/help — довідка"
+    )
     await update.message.reply_html(welcome)
 
 async def help_cmd(update, context):
@@ -90,26 +90,23 @@ def spawn_enemy_for(p, location="Тракт") -> Enemy:
         "Руїни": [("Кістяний вартовий",22,7,2,16,14), ("Орк-берсерк",28,9,3,22,20), ("Рицар-відступник",32,10,4,26,24)],
         "Гільдія авантюристів": [("Сторож гільдії (спаринг)", 18,6,2,8,0)],
     }
-    name, base_hp, base_atk, base_def, exp, gold = random_choice(tables.get(location, tables["Тракт"]))
+    import random
+    name, base_hp, base_atk, base_def, exp, gold = random.choice(tables.get(location, tables["Тракт"]))
     hp = base_hp + (p.level - 1) * 4
     atk = base_atk + (p.level - 1)
     defense = base_def + (p.level // 3)
     exp_reward = exp + (p.level - 1) * 3
-    gold_reward = gold + __import__("random").randint(0, p.level * 2)
+    gold_reward = gold + random.randint(0, p.level * 2)
     return Enemy(name=name, hp=hp, max_hp=hp, atk=atk, defense=defense,
                  exp_reward=exp_reward, gold_reward=gold_reward)
 
-def random_choice(lst):
-    import random
-    return random.choice(lst)
-
 async def explore(update, context):
+    import random as R
     p = ensure_player_ud(context.user_data)
     if not p.registered:
         await update.message.reply_html("Спершу зареєструйтесь у гільдії: /register")
         return ConversationHandler.END
     location = get_location(context.user_data)
-    import random as R
     roll = R.random()
     if roll < 0.6:
         enemy = spawn_enemy_for(p, location)
@@ -131,7 +128,7 @@ async def explore(update, context):
         )
         return ConversationHandler.END
     else:
-        healed = min(p.max_hp - p.hp, __import__("random").randint(5, 12))
+        healed = min(p.max_hp - p.hp, R.randint(5, 12))
         p.hp += healed
         context.user_data["player"] = p.asdict()
         await update.message.reply_html(f"⛺ Відпочинок: +{healed} HP. Тепер {p.hp}/{p.max_hp}.")

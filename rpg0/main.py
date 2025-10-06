@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 import logging
-import os
 from .bot import build_app
 from .config import WEBHOOK_URL, PORT, WEBHOOK_PATH
 
@@ -25,4 +24,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-    
