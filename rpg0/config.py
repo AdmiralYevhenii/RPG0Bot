@@ -15,37 +15,25 @@ PORT = int(os.getenv("PORT", "10000"))
 WEBHOOK_PATH = os.getenv("WEBHOOK_PATH", os.getenv("BOT_TOKEN", "bot"))
 
 # ---- Локації та переходи ----------------------------------------------------
-LOC_CITY   = "Місто"
-LOC_ROAD   = "Тракт"
-LOC_RUINS  = "Руїни"
-LOC_FOREST = "Старий ліс"
-LOC_GUILD  = "Гільдія авантюристів"
-LOC_SHOP   = "Крамниця (Місто)"
+LOC_GUILD       = "Гільдія авантюристів"
+LOC_CITY        = "Місто"
+LOC_TRACT       = "Тракт"
+LOC_RUINS       = "Руїни"
+LOC_OLD_FOREST  = "Старий ліс"
+LOC_SHOP        = "Крамниця"  # локація-магазин у Місті
 
-DEFAULT_LOCATION = LOC_ROAD
+DEFAULT_LOCATION = LOC_TRACT
 
 # Порядок відображення у кнопках
-LOCATION_ORDER = [LOC_CITY, LOC_ROAD, LOC_RUINS, LOC_FOREST, LOC_GUILD, LOC_SHOP]
+LOCATION_ORDER = [LOC_CITY, LOC_RUINS, LOC_OLD_FOREST, LOC_GUILD, LOC_SHOP]
 
-# Граф суміжності (куди можна перейти безпосередньо з поточної локації)
-ADJACENT = {
-    # З гільдії: лише до Міста або на Тракт
-    LOC_GUILD:  [LOC_CITY, LOC_ROAD],
-
-    # Місто — центральний вузол: у Руїни, Старий ліс, на Тракт та в Крамницю (як окрему локацію)
-    LOC_CITY:   [LOC_RUINS, LOC_FOREST, LOC_ROAD, LOC_SHOP, LOC_GUILD],
-
-    # Тракт — коридор між Містом і іншими окраїнами
-    LOC_ROAD:   [LOC_CITY, LOC_RUINS, LOC_FOREST, LOC_GUILD],
-
-    # Руїни — назад у Місто або на Тракт
-    LOC_RUINS:  [LOC_CITY, LOC_ROAD],
-
-    # Старий ліс — назад у Місто або на Тракт
-    LOC_FOREST: [LOC_CITY, LOC_ROAD],
-
-    # Крамниця (всередині Міста) — вихід назад лише в Місто
-    LOC_SHOP:   [LOC_CITY],
+TRAVEL_GRAPH = {
+    LOC_GUILD:      [LOC_CITY, LOC_TRACT],
+    LOC_CITY:       [LOC_GUILD, LOC_TRACT, LOC_RUINS, LOC_OLD_FOREST, LOC_SHOP],
+    LOC_SHOP:       [LOC_CITY],            # магазин — кімната в Місті
+    LOC_TRACT:      [LOC_CITY, LOC_RUINS, LOC_OLD_FOREST],
+    LOC_RUINS:      [LOC_CITY, LOC_TRACT],
+    LOC_OLD_FOREST: [LOC_CITY, LOC_TRACT],
 }
 
 # ---- Класи і передісторії (для реєстрації) ---------------------------------
@@ -62,12 +50,7 @@ BACKSTORIES = {
     "Адепт храму":    {"desc": "благословення захисту",     "defense": 2},
     "Шляхтич":        {"desc": "має статки",               "gold": 50},
 }
-# ---- Налаштування вмінь / Гільдії ------------------------------------------
-# Скільки умінь можна одночасно тримати в «слотах бою»
+# ---- Гільдія / вміння ------------------------------------------------------
 SKILL_SLOT_MAX = 3
-
-# Кожні скільки рівнів пропонувати вибір нового уміння
 SKILL_OFFER_LEVEL_STEP = 5
-
-# (необов'язково) базова ціна «перевчання»/скидання слотів у Гільдії
 GUILD_RESPEC_COST = 25
