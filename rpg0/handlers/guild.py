@@ -10,11 +10,22 @@ from ..models import ensure_player_ud
 from ..utils.skills import CLASS_SKILLS, skill_short_desc
 
 
-def _kb(options, prefix):
-    return InlineKeyboardMarkup([[InlineKeyboardButton(txt, callback_data=f"{prefix}:{data}")]
-                                 for txt, data in options])
+def _kb(options, prefix: str | None = None) -> InlineKeyboardMarkup:
+    """
+    Будує одноколонкову Inline-клавіатуру.
+    options: iterable[(text, data)]
+    Якщо prefix передано — додає його як "prefix:data", інакше бере data як є.
+    """
+    def cb(data: str) -> str:
+        return f"{prefix}:{data}" if prefix else data
 
-def _render_loadout(p):
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(txt, callback_data=cb(data))]
+        for txt, data in options
+    ])
+
+
+def _render_loadout(p) -> str:
     load = list(getattr(p, "skills_loadout", []) or [])
     if not load:
         return "— не вибрано —"
@@ -23,11 +34,13 @@ def _render_loadout(p):
         out.append(f"{i}. <b>{name}</b> — {skill_short_desc(name)}")
     return "\n".join(out)
 
-def _render_known(p):
+
+def _render_known(p) -> str:
     known = list(getattr(p, "skills_known", []) or [])
     if not known:
         return "— немає вивчених умінь —"
     return "\n".join([f"• <b>{s}</b> — {skill_short_desc(s)}" for s in known])
+
 
 def _in_guild(context) -> bool:
     return context.user_data.get("location") == LOC_GUILD
@@ -95,10 +108,10 @@ async def on_guild_action(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if not free:
             await q.edit_message_text("Немає доступних умінь, які можна додати.", parse_mode=ParseMode.HTML)
             return
-        opts = [ (f"➕ {s}", f"guild:addpick:{s}") for s in free ]
+        opts = [(f"➕ {s}", f"guild:addpick:{s}") for s in free]
         await q.edit_message_text(
             "Оберіть уміння для додавання до активного набору:",
-            reply_markup=_kb(opts, prefix="noop"),  # prefix ігнорується, береться data з opts
+            reply_markup=_kb(opts),  # без префікса — callback_data залишаються як у opts
         )
         return
 
@@ -123,10 +136,10 @@ async def on_guild_action(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if not loadout:
             await q.edit_message_text("Лоадаут порожній.", parse_mode=ParseMode.HTML)
             return
-        opts = [ (f"➖ {s}", f"guild:rempick:{s}") for s in loadout ]
+        opts = [(f"➖ {s}", f"guild:rempick:{s}") for s in loadout]
         await q.edit_message_text(
             "Оберіть уміння для зняття з активного набору:",
-            reply_markup=_kb(opts, prefix="noop"),
+            reply_markup=_kb(opts),
         )
         return
 
@@ -145,7 +158,7 @@ async def on_guild_action(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     # Вивчення нового уміння (коли pending_skill_choice=True)
     if data == "guild:learn":
         cls = getattr(p, "class_name", None)
-        pool = list(CLASS_SKILLS.get(cls, []))
+        pool = list(CLASS_SKILLS.get(cls, {}).keys())
         known = set(getattr(p, "skills_known", []) or [])
         choices = [s for s in pool if s not in known]
         if not getattr(p, "pending_skill_choice", False):
@@ -159,7 +172,7 @@ async def on_guild_action(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         opts = [(f"🆕 {s}", f"guild:learnpick:{s}") for s in choices[:6]]  # показуємо до 6
         await q.edit_message_text(
             "Оберіть нове уміння для вивчення:",
-            reply_markup=_kb(opts, prefix="noop"),
+            reply_markup=_kb(opts),
         )
         return
 

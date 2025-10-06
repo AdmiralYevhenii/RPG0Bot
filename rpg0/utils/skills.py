@@ -27,11 +27,28 @@ CLASS_SKILLS: Dict[str, Dict[str, Dict]] = {
     },
 }
 
+# ---- Допоміжні довідкові функції ----
+
 def skills_for_class(class_name: str) -> Dict[str, Dict]:
     return CLASS_SKILLS.get(class_name or "", {})
 
 def list_skills_names_for_class(class_name: str) -> List[str]:
     return list(skills_for_class(class_name).keys())
+
+def skill_short_desc(skill_name: str, class_name: str | None = None) -> str:
+    """
+    Повертає короткий опис уміння.
+    Якщо class_name передано — шукаємо лише в ньому, інакше проглядаємо всі класи.
+    """
+    if class_name:
+        sdef = CLASS_SKILLS.get(class_name, {}).get(skill_name)
+        return (sdef or {}).get("desc", "Опис відсутній.")
+    for _cls, skills in CLASS_SKILLS.items():
+        if skill_name in skills:
+            return skills[skill_name].get("desc", "Опис відсутній.")
+    return "Опис відсутній."
+
+# ---- Навчання/набір ----
 
 def learnable_skills_for_player(p) -> List[str]:
     pool = set(list_skills_names_for_class(p.class_name))
@@ -53,6 +70,9 @@ def can_add_to_loadout(p, skill_name: str, slot_max: int) -> Tuple[bool, str]:
     return True, "Окей"
 
 def add_to_loadout(p, skill_name: str, slot_max: int) -> Tuple[bool, str]:
+    # гарантуємо список
+    if p.skills_loadout is None:
+        p.skills_loadout = []
     ok, msg = can_add_to_loadout(p, skill_name, slot_max)
     if not ok:
         return False, msg
@@ -79,13 +99,14 @@ def apply_skill(player, enemy, skill_name: str, battle_state: dict) -> str:
     text = f"✨ {skill_name}: "
 
     if stype == "dmg":
-        from ..handlers.battle import roll_damage  # відкладений імпорт (щоб не циклитись)
+        # відкладений імпорт, щоб уникнути циклічного імпорту
+        from ..handlers.battle import roll_damage
         dmg = max(1, roll_damage(player.atk + power, enemy.defense))
         enemy.hp -= dmg
         text += f"завдаєте {dmg} шкоди."
     elif stype == "bleed":
         est = battle_state.setdefault("e_status", {})
-        est["bleed"] = max(est.get("bleed", 0), power)  # тривалість
+        est["bleed"] = max(est.get("bleed", 0), power)  # тривалість у ходах
         text += f"накладено кровотечу на {power} х."
     elif stype == "stun":
         est = battle_state.setdefault("e_status", {})
@@ -112,13 +133,19 @@ def apply_skill(player, enemy, skill_name: str, battle_state: dict) -> str:
     return text
 
 def consume_player_temp_buffs(player, battle_state: dict) -> Tuple[int, int]:
-    """(atk_bonus, def_bonus) на атаку гравця. З’їдає ефект “на 1 хід”."""
+    """(atk_bonus, def_bonus) на атаку гравця. З’їдає ефект “на 1 хід” для атаки."""
     pst = battle_state.setdefault("p_status", {})
     atk_b = pst.get("atk_up_val", 0) if pst.get("atk_up") else 0
     def_b = pst.get("def_up_val", 0) if pst.get("def_up") else 0
     pst["atk_up"] = 0; pst["atk_up_val"] = 0
-    # def_up НЕ скидаємо тут — він впливає на атаку ворога; скинемо в enemy_turn
+    # def_up НЕ скидаємо тут — він впливає на атаку ворога; скиньте після ходу ворога через clear_player_def_buff_after_enemy_turn()
     return atk_b, def_b
+
+def clear_player_def_buff_after_enemy_turn(battle_state: dict) -> None:
+    """Скинути одноходовий деф-баф наприкінці ходу ворога."""
+    pst = battle_state.setdefault("p_status", {})
+    pst["def_up"] = 0
+    pst["def_up_val"] = 0
 
 def turn_tick_cooldowns(battle_state: dict) -> None:
     cds = battle_state.setdefault("cooldowns", {})
@@ -143,3 +170,21 @@ def enemy_is_stunned(battle_state: dict) -> bool:
         est["stun"] -= 1
         return True
     return False
+
+__all__ = [
+    "CLASS_SKILLS",
+    "skills_for_class",
+    "list_skills_names_for_class",
+    "skill_short_desc",
+    "learnable_skills_for_player",
+    "pick_new_skill_options",
+    "can_add_to_loadout",
+    "add_to_loadout",
+    "remove_from_loadout",
+    "apply_skill",
+    "consume_player_temp_buffs",
+    "clear_player_def_buff_after_enemy_turn",
+    "turn_tick_cooldowns",
+    "apply_start_of_enemy_turn_effects",
+    "enemy_is_stunned",
+]
