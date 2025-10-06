@@ -22,17 +22,21 @@ def kb_shop_main() -> InlineKeyboardMarkup:
 def shop_stock() -> list[dict]:
     # Статичний набір — можна розширювати
     return [
-        {"name":"Кинджал ремісника","rarity":"common","title":"⚪ Звичайний","emoji":"⚪","type":"weapon","atk":1,"def":0,"price":15,"equipped":False,"dur":20,"dur_max":20},
-        {"name":"Шкіряний нагрудник","rarity":"common","title":"⚪ Звичайний","emoji":"⚪","type":"armor","atk":0,"def":1,"price":15,"equipped":False,"dur":25,"dur_max":25},
-        {"name":"Срібний перстень","rarity":"uncommon","title":"🟢 Незвичайний","emoji":"🟢","type":"accessory","atk":1,"def":1,"price":35,"equipped":False,"dur":30,"dur_max":30},
-        {"name":"Меч лісника","rarity":"uncommon","title":"🟢 Незвичайний","emoji":"🟢","type":"weapon","atk":2,"def":0,"price":38,"equipped":False,"dur":35,"dur_max":35},
-        {"name":"Лати стража","rarity":"rare","title":"🔵 Рідкісний","emoji":"🔵","type":"armor","atk":0,"def":3,"price":70,"equipped":False,"dur":50,"dur_max":50},
+        {"name":"Кинджал ремісника","rarity":"common","title":"⚪ Звичайний","emoji":"⚪","type":"weapon","atk":1,"defense":0,"price":15,"equipped":False,"durability":20,"durability_max":20},
+        {"name":"Шкіряний нагрудник","rarity":"common","title":"⚪ Звичайний","emoji":"⚪","type":"armor","atk":0,"defense":1,"price":15,"equipped":False,"durability":25,"durability_max":25},
+        {"name":"Срібний перстень","rarity":"uncommon","title":"🟢 Незвичайний","emoji":"🟢","type":"accessory","atk":1,"defense":1,"price":35,"equipped":False,"durability":30,"durability_max":30},
+        {"name":"Меч лісника","rarity":"uncommon","title":"🟢 Незвичайний","emoji":"🟢","type":"weapon","atk":2,"defense":0,"price":38,"equipped":False,"durability":35,"durability_max":35},
+        {"name":"Лати стража","rarity":"rare","title":"🔵 Рідкісний","emoji":"🔵","type":"armor","atk":0,"defense":3,"price":70,"equipped":False,"durability":50,"durability_max":50},
     ]
 
 def format_item_line(it: dict, idx: int | None = None, with_price: bool = False, sell_mode: bool = False) -> str:
-    t = f"{it['emoji']} <b>{it['name']}</b> — {it['title']} [{it['type']}] (+ATK {it.get('atk',0)}, +DEF {it.get('def',0)})"
-    if "dur" in it and "dur_max" in it:
-        t += f" | ⚙️{it['dur']}/{it['dur_max']}"
+    t = f"{it['emoji']} <b>{it['name']}</b> — {it['title']} [{it['type']}] (+ATK {it.get('atk',0)}, +DEF {it.get('defense',0)})"
+    if "durability" in it and ("durability_max" in it or isinstance(it.get("durability"), int)):
+        # показуємо тільки 'durability', або 'durability/durability_max' коли є обидва
+        if "durability_max" in it:
+            t += f" | ⚙️{it['durability']}/{it['durability_max']}"
+        else:
+            t += f" | ⚙️{it['durability']}"
     if with_price and it.get("price"):
         t += f" — ціна: {it['price']}з"
     if sell_mode:
@@ -40,6 +44,7 @@ def format_item_line(it: dict, idx: int | None = None, with_price: bool = False,
     if idx is not None:
         t = f"{idx}. " + t
     return t
+
 
 def render_shop_buy() -> tuple[str, InlineKeyboardMarkup]:
     goods = shop_stock()
