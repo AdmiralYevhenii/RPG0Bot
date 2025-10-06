@@ -1,136 +1,233 @@
 # -*- coding: utf-8 -*-
-"""
-Бій (ConversationHandler): атака/захист/вміння/зілля/втекти, статуси, ініціатива.
-"""
+from __future__ import annotations
+
 import random
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.constants import ParseMode
-from telegram.ext import ContextTypes, ConversationHandler, CallbackQueryHandler, CommandHandler
-from ..models import ensure_player_ud, dict_to_enemy, Enemy
-from ..utils.equipment import damage_durability_on_hit
-from ..config import BLEED_TURNS, STUN_TURNS
-from rpg0.utils.equipment import damage_durability_on_hit
+from telegram.ext import ContextTypes, ConversationHandler
 
+from ..models import dict_to_player, dict_to_enemy
+# Стани розмови
 CHOOSING_ACTION, ENEMY_TURN, LOOTING = range(3)
 
-def battle_keyboard(in_battle: bool = True) -> InlineKeyboardMarkup:
-    if in_battle:
-        buttons = [
-            [InlineKeyboardButton("⚔️ Атака", callback_data="battle:attack"),
-             InlineKeyboardButton("🛡️ Захист", callback_data="battle:defend")],
-            [InlineKeyboardButton("✨ Вміння", callback_data="battle:skill"),
-             InlineKeyboardButton("🧪 Зілля", callback_data="battle:potion")],
-            [InlineKeyboardButton("🏃 Втекти", callback_data="battle:run")],
-        ]
-    else:
-        buttons = [[InlineKeyboardButton("➡️ Продовжити", callback_data="battle:continue")]]
-    return InlineKeyboardMarkup(buttons)
+
+# ----- Кубики -----
 
 def roll_damage(atk: int, defense: int) -> int:
-    base = max(1, atk - defense + random.randint(-2, 2))
-    return base
+    base = max(0, atk - defense)
+    variance = random.randint(-2, 2)
+    return max(1, base + variance)
 
-async def explore_entry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Викликається з /explore у зовнішньому модулі — тут лише клавіатура, все інше робиться там."""
-    # резерв, якщо треба
-    return ConversationHandler.END
+def roll_player_attack(atk: int, defense: int) -> tuple[int, bool]:
+    crit = random.random() < 0.15
+    dmg = roll_damage(atk, defense)
+    if crit:
+        dmg *= 2
+    return dmg, crit
+
+
+# ----- Клавіатура -----
+
+def battle_keyboard(p=None, in_battle: bool = True, battle_state: dict | None = None) -> InlineKeyboardMarkup:
+    if not in_battle:
+        return InlineKeyboardMarkup([[InlineKeyboardButton("➡️ Продовжити", callback_data="continue")]])
+
+    rows = [
+        [InlineKeyboardButton("⚔️ Атака", callback_data="battle:attack"),
+         InlineKeyboardButton("🛡️ Захист", callback_data="battle:defend")]
+    ]
+    # Кнопки умінь із КД (до 3)
+    if p:
+        cds = (battle_state or {}).get("cooldowns", {})
+        line = []
+        for name in (p.skills_loadout or [])[:3]:
+            cd = cds.get(name, 0)
+            label = f"✨ {name}{' ['+str(cd)+']' if cd>0 else ''}"
+            line.append(InlineKeyboardButton(label, callback_data=f"battle:skill:{name}"))
+            if len(line) == 2:
+                rows.append(line); line = []
+        if line:
+            rows.append(line)
+
+    rows.append([InlineKeyboardButton("🧪 Зілля", callback_data="battle:potion"),
+                 InlineKeyboardButton("🏃 Втекти", callback_data="battle:run")])
+    return InlineKeyboardMarkup(rows)
+
+
+# ----- Ход гравця -----
 
 async def on_battle_action(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    q = update.callback_query
-    await q.answer()
-    p = ensure_player_ud(context.user_data)
+    query = update.callback_query
+    await query.answer()
+
+    p = dict_to_player(context.user_data.get("player"))
     e = dict_to_enemy(context.user_data.get("enemy"))
+    battle_state = context.user_data.setdefault("battle", {"cooldowns": {}, "e_status": {}, "p_status": {}})
 
-    data = q.data.split(":",1)[1]
+    data = query.data  # battle:attack / battle:defend / battle:skill:<name> / battle:potion / battle:run
+    action = data.split(":", 2)[1] if ":" in data else data
     context.user_data["defending"] = False
-    txt = ""
+    text = ""
 
-    if data == "attack":
-        dmg, crit = p.roll_player_attack(e.defense)
+    if action == "attack":
+        from ..utils.skills import consume_player_temp_buffs, turn_tick_cooldowns
+        atk_b, _ = consume_player_temp_buffs(p, battle_state)
+        dmg, crit = roll_player_attack(p.atk + atk_b, e.defense)
         e.hp -= dmg
-        damage_durability_on_hit(p)
-        txt = f"⚔️ Ви вдарили {e.name} на {dmg} шкоди." + (" <b>Крит!</b>" if crit else "")
-    elif data == "defend":
+        text = f"⚔️ Ви вдарили {e.name} на {dmg} шкоди." + (" <b>Крит!</b>" if crit else "")
+        turn_tick_cooldowns(battle_state)
+
+    elif action == "defend":
         context.user_data["defending"] = True
-        txt = "🛡️ Ви в стійці захисту — отримана шкода цього ходу зменшена."
-    elif data == "skill":
-        # поки що простий шаблон: якщо є слотові навички — додаємо +3 атаки
-        dmg, crit = p.roll_player_attack(e.defense)
-        bonus = 3 if p.slotted_skills else 0
-        e.hp -= (dmg + bonus)
-        damage_durability_on_hit(p)
-        txt = f"✨ Ви застосували вміння! {e.name} отримує {dmg + bonus} шкоди."
-    elif data == "potion":
+        text = "🛡️ Ви у стійці захисту — шкода цього ходу по вам зменшена вдвічі."
+        from ..utils.skills import turn_tick_cooldowns
+        turn_tick_cooldowns(battle_state)
+
+    elif action == "skill":
+        # skill name у третій частині
+        sname = data.split(":", 2)[2]
+        from ..utils.skills import apply_skill, turn_tick_cooldowns
+        text = apply_skill(p, e, sname, battle_state)
+        turn_tick_cooldowns(battle_state)
+
+    elif action == "potion":
         healed = p.heal()
         context.user_data["player"] = p.asdict()
         if healed == 0:
-            txt = "🧪 Зілля відсутні або HP повне. Хід втрачено."
+            text = "🧪 Зілля відсутні або HP повне. Хід втрачено."
         else:
-            txt = f"🧪 Ви випили зілля та відновили {healed} HP. ({p.hp}/{p.max_hp})"
-    elif data == "run":
+            text = f"🧪 Ви випили зілля та відновили {healed} HP. ({p.hp}/{p.max_hp})"
+        from ..utils.skills import turn_tick_cooldowns
+        turn_tick_cooldowns(battle_state)
+
+    elif action == "run":
         if random.random() < 0.5:
-            await q.edit_message_text("🏃 Ви успішно втекли від бою.")
-            context.user_data.pop("enemy", None)
+            await query.edit_message_text("🏃 Ви успішно втекли від бою.")
             return ConversationHandler.END
         else:
-            txt = "❌ Втекти не вдалося!"
-    elif data == "continue":
-        await q.edit_message_text("➡️ Продовжуємо пригоду! Використайте /explore.")
-        return ConversationHandler.END
+            text = "❌ Втекти не вдалося!"
+            from ..utils.skills import turn_tick_cooldowns
+            turn_tick_cooldowns(battle_state)
 
     # Перевірка смерті ворога
     if e.hp <= 0:
-        reward_exp = e.exp_reward; reward_gold = e.gold_reward
-        lvl_before = p.level
+        reward_exp = e.exp_reward
+        reward_gold = e.gold_reward
+        level_before = p.level
         level, leveled = p.gain_exp(reward_exp)
         p.gold += reward_gold
         context.user_data["player"] = p.asdict()
         context.user_data.pop("enemy", None)
+        context.user_data.pop("battle", None)  # закрити стан бою
+
         summary = f"💀 {e.name} переможений!\n+{reward_exp} EXP, +{reward_gold} золота.\n"
         if leveled:
-            summary += f"⬆️ Рівень підвищено до {level}! Параметри зросли, HP відновлено до {p.max_hp}.\n"
-        await q.edit_message_text(txt + "\n\n" + summary, reply_markup=battle_keyboard(False), parse_mode=ParseMode.HTML)
+            summary += f"⬆️ Рівень підвищено до {level}! HP/Атака/Захист зросли, HP відновлено до {p.max_hp}."
+            if p.pending_skill_choice:
+                summary += "\n🆕 Доступний вибір нового вміння у Гільдії (/guild)."
+
+        await query.edit_message_text(
+            text + "\n\n" + summary,
+            reply_markup=battle_keyboard(in_battle=False),
+            parse_mode=ParseMode.HTML,
+        )
         return LOOTING
 
-    # Оновимо ворога і хід ворога
+    # Оновити ворога, перейти до ходу ворога
     context.user_data["enemy"] = e.__dict__
-    status = f"<b>{p.name}</b> HP: {p.hp}/{p.max_hp}\n<b>{e.name}</b> HP: {e.hp}/{e.max_hp}"
-    await q.edit_message_text(txt + "\n\n" + status + "\n\nХід ворога...", parse_mode=ParseMode.HTML)
+    status = (f"<b>{p.name}</b> HP: {p.hp}/{p.max_hp}\n"
+              f"<b>{e.name}</b> HP: {e.hp}/{e.max_hp}")
+    await query.edit_message_text(
+        text + "\n\n" + status + "\n\nХід ворога...",
+        parse_mode=ParseMode.HTML,
+    )
     return await enemy_turn(update, context)
 
+
+# ----- Хід ворога -----
+
 async def enemy_turn(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    p = ensure_player_ud(context.user_data)
+    p = dict_to_player(context.user_data.get("player"))
     e = dict_to_enemy(context.user_data.get("enemy"))
+    battle_state = context.user_data.setdefault("battle", {"cooldowns": {}, "e_status": {}, "p_status": {}})
 
     if not e.is_alive():
         return LOOTING
 
+    # Ефекти на початку ходу ворога
+    from ..utils.skills import apply_start_of_enemy_turn_effects, enemy_is_stunned, turn_tick_cooldowns
+    start_txt = apply_start_of_enemy_turn_effects(e, battle_state)
+    if not e.is_alive():
+        context.user_data["enemy"] = e.__dict__
+        # тікаємо КД наприкінці ходу (формально хід ворога відбувся)
+        turn_tick_cooldowns(battle_state)
+        await update.effective_message.reply_html(
+            (start_txt + "\n" if start_txt else "") + "Ворог стік кров’ю та впав!",
+            reply_markup=battle_keyboard(in_battle=False),
+        )
+        return LOOTING
+
+    if enemy_is_stunned(battle_state):
+        # Завершити хід ворога
+        context.user_data["enemy"] = e.__dict__
+        turn_tick_cooldowns(battle_state)
+        await update.effective_message.reply_html(
+            (start_txt + "\n" if start_txt else "") + f"😵 {e.name} оглушений і пропускає хід!\n\nВаш хід:",
+            reply_markup=battle_keyboard(p, True, battle_state),
+        )
+        return CHOOSING_ACTION
+
+    # Атака ворога
     special = random.random() < 0.2
     atk = e.atk + (3 if special else 0)
-    dmg = roll_damage(atk, p.defense)
+
+    # Врахувати “стійку”/деф-баф від умінь на 1 хід
+    pst = battle_state.setdefault("p_status", {})
+    def_up_val = pst.get("def_up_val", 0) if pst.get("def_up") else 0
+
+    dmg = roll_damage(atk, max(0, p.defense + def_up_val))
     if context.user_data.get("defending"):
         dmg = max(1, dmg // 2)
 
     p.hp -= dmg
     context.user_data["player"] = p.asdict()
+    context.user_data["enemy"] = e.__dict__
+    # Баф захисту спрацьовує на атаку ворога і гаситься
+    pst["def_up"] = 0; pst["def_up_val"] = 0
 
-    act = "завдає критичної атаки" if special else "б'є"
-    text = (f"🧟‍♂️ {e.name} {act} на {dmg} шкоди!\n"
-            f"<b>{p.name}</b> HP: {p.hp}/{p.max_hp}\n<b>{e.name}</b> HP: {e.hp}/{e.max_hp}")
+    action_text = (
+        (start_txt + "\n" if start_txt else "") +
+        f"🧟‍♂️ {e.name} {'завдає критичної атаки' if special else 'б\'є'} на {dmg} шкоди!\n"
+        f"<b>{p.name}</b> HP: {p.hp}/{p.max_hp}\n"
+        f"<b>{e.name}</b> HP: {e.hp}/{e.max_hp}"
+    )
 
     if p.hp <= 0:
         context.user_data.pop("enemy", None)
-        await update.effective_message.reply_html(text + "\n\n☠️ Ви загинули. /newgame — щоб почати спочатку.")
+        context.user_data.pop("battle", None)
+        await update.effective_message.reply_html(
+            action_text + "\n\n☠️ Ви загинули. /newgame — щоб розпочати спочатку."
+        )
         return ConversationHandler.END
 
-    await update.effective_message.reply_html(text + "\n\nВаш хід: оберіть дію.", reply_markup=battle_keyboard(True))
+    # Кінець ходу ворога: тік КД
+    from ..utils.skills import turn_tick_cooldowns
+    turn_tick_cooldowns(battle_state)
+
+    await update.effective_message.reply_html(
+        action_text + "\n\nВаш хід: оберіть дію.",
+        reply_markup=battle_keyboard(p, True, battle_state),
+    )
     return CHOOSING_ACTION
 
-async def after_loot(update, context):
-    q = update.callback_query
-    if q:
-        await q.answer()
-        await q.edit_message_text("➡️ Продовжуємо пригоду! Використайте /explore.")
+
+# ----- Пост-битва -----
+
+async def after_loot(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    if query:
+        await query.answer()
+        await query.edit_message_text("➡️ Продовжуємо пригоду! Використайте /explore.")
     else:
         await update.message.reply_text("➡️ Продовжуємо пригоду! Використайте /explore.")
     return ConversationHandler.END

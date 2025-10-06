@@ -5,8 +5,8 @@
 import os
 
 BOT_DISPLAY_NAME = os.getenv("BOT_DISPLAY_NAME", "RPG0")
-
 PERSIST_FILE = os.getenv("PERSIST_FILE", "rpgbot.pickle")
+DEFAULT_LOCATION = "Тракт"
 
 # Вебхуки (Render)
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")        # типу: https://your-app.onrender.com
@@ -22,6 +22,9 @@ STUN_TURNS = 1
 DURABILITY_MAX = 20
 REPAIR_COST_PER_POINT = 2
 SELL_RATE = 0.6
+SKILL_SLOT_MAX = 3           # скільки умінь можна взяти в бій
+SKILL_SELECT_INTERVAL = 5    # кожні 5 рівнів пропонується нове вміння
+
 
 # Класи/передісторії (для /register)
 CLASSES = {

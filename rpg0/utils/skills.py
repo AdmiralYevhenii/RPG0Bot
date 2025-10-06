@@ -1,52 +1,145 @@
 # -*- coding: utf-8 -*-
 """
-Скіли за класами, кд, навчання у Гільдії, вибір активних навичок (до 3).
+Класові вміння + утиліти для вибору/менеджменту/застосування в бою.
+Ефекти: шкода, кровотеча, оглушення, тимчасові бафи, лікування.
 """
+from __future__ import annotations
 from typing import Dict, List, Tuple
-from ..config import SKILL_COOLDOWN_TURNS
+import random
 
-# Базовий пул скілів за класами
-SKILLS_BY_CLASS: Dict[str, Dict[str, Dict]] = {
+# Опис класових умінь
+# type: dmg | bleed | stun | buff_def | buff_atk | heal
+CLASS_SKILLS: Dict[str, Dict[str, Dict]] = {
     "Рицар": {
-        "shield_bash": {"name": "Удар щитом", "desc": "Стан: оглушення на 1 хід", "cd": 3, "stun": 1, "bleed": 0, "atk_boost": 0},
-        "guard_stance": {"name": "Стійка захисту", "desc": "+2 DEF на цей бій", "cd": 4, "stun": 0, "bleed": 0, "def_add": 2},
+        "Щитова стійка": {"cd": 3, "type": "buff_def", "power": 2, "desc": "На 1 хід +2 до захисту."},
+        "Рубаючий удар": {"cd": 2, "type": "dmg", "power": 4, "desc": "Сильний удар (+4 базової шкоди)."},
+        "Оглушення": {"cd": 4, "type": "stun", "power": 1, "desc": "Оглушає ворога на 1 хід."},
     },
     "Стрілець": {
-        "aimed_shot": {"name": "Прицільний постріл", "desc": "Велика шкода", "cd": 3, "attack_add": 3},
-        "bleed_arrow": {"name": "Кровоточива стріла", "desc": "Кровотеча на 3 ходи", "cd": 4, "bleed": 3},
+        "Прицільний постріл": {"cd": 2, "type": "dmg", "power": 3, "desc": "Точний постріл (+3 базової шкоди)."},
+        "Кровоточива стріла": {"cd": 3, "type": "bleed", "power": 2, "desc": "Кровотеча 2 ходи."},
+        "Уклон": {"cd": 3, "type": "buff_def", "power": 2, "desc": "На 1 хід +2 до захисту."},
     },
     "Маг": {
-        "fire_bolt": {"name": "Вогняний болт", "desc": "Дод. шкода + шанс підпалу (кровотеча як аналог)", "cd": 3, "attack_add": 2, "bleed": 2},
-        "time_twist": {"name": "Скрут часу", "desc": "+ініціатива", "cd": 4, "initiative_add": 40},
+        "Вогняний снаряд": {"cd": 2, "type": "dmg", "power": 5, "desc": "Потужний снаряд (+5 базової шкоди)."},
+        "Крижане скування": {"cd": 4, "type": "stun", "power": 1, "desc": "Заморожує на 1 хід (оглушення)."},
+        "Імпульс сили": {"cd": 3, "type": "buff_atk", "power": 2, "desc": "На 1 хід +2 до атаки."},
     },
 }
 
-def skills_for_class(cls: str) -> Dict[str, Dict]:
-    return SKILLS_BY_CLASS.get(cls, {})
+def skills_for_class(class_name: str) -> Dict[str, Dict]:
+    return CLASS_SKILLS.get(class_name or "", {})
 
-def grant_skill_on_level(p, step: int = 5) -> Tuple[bool, str]:
-    """На кожному step-рівні (5,10,15...) пропонуємо вибрати новий скіл з класового пулу."""
-    if p.level % step != 0:
-        return False, ""
-    pool = skills_for_class(p.class_name)
-    if not pool:
-        return False, ""
-    # знайти ті, яких ще немає
-    candidates = [sid for sid in pool.keys() if sid not in p.known_skills]
-    if not candidates:
-        return False, ""
-    # Просто автоматично додаємо перший (або зроби меню вибору в Гільдії)
-    sid = candidates[0]
-    p.known_skills.append(sid)
-    return True, f"Ви опанували нове вміння: {pool[sid]['name']}"
+def list_skills_names_for_class(class_name: str) -> List[str]:
+    return list(skills_for_class(class_name).keys())
 
-def format_skills_list(p) -> str:
-    if not p.known_skills:
-        return "Немає вивчених вмінь."
-    pool = skills_for_class(p.class_name)
-    lines = []
-    for sid in p.known_skills:
-        meta = pool.get(sid, {"name": sid})
-        used = "🟩" if sid in p.slotted_skills else "⬜"
-        lines.append(f"{used} {meta.get('name', sid)} (/{sid})")
-    return "\n".join(lines)
+def learnable_skills_for_player(p) -> List[str]:
+    pool = set(list_skills_names_for_class(p.class_name))
+    known = set(p.skills_known or [])
+    return sorted(list(pool - known))
+
+def pick_new_skill_options(p, k: int = 3) -> List[str]:
+    cand = learnable_skills_for_player(p)
+    random.shuffle(cand)
+    return cand[:k]
+
+def can_add_to_loadout(p, skill_name: str, slot_max: int) -> Tuple[bool, str]:
+    if skill_name not in (p.skills_known or []):
+        return False, "Спочатку потрібно вивчити це вміння."
+    if skill_name in (p.skills_loadout or []):
+        return False, "Вміння вже у наборі."
+    if len(p.skills_loadout or []) >= slot_max:
+        return False, f"Максимум у наборі: {slot_max}."
+    return True, "Окей"
+
+def add_to_loadout(p, skill_name: str, slot_max: int) -> Tuple[bool, str]:
+    ok, msg = can_add_to_loadout(p, skill_name, slot_max)
+    if not ok:
+        return False, msg
+    p.skills_loadout.append(skill_name)
+    return True, f"Додано до набору: {skill_name}"
+
+def remove_from_loadout(p, skill_name: str) -> Tuple[bool, str]:
+    if skill_name not in (p.skills_loadout or []):
+        return False, "Цього вміння немає у наборі."
+    p.skills_loadout.remove(skill_name)
+    return True, f"Прибрано: {skill_name}"
+
+# ---- Бойова частина ----
+
+def apply_skill(player, enemy, skill_name: str, battle_state: dict) -> str:
+    """Застосувати вміння. Повертає текст ефекту."""
+    sdef = skills_for_class(player.class_name).get(skill_name)
+    if not sdef:
+        return "Це вміння недоступне."
+    cd = sdef["cd"]; stype = sdef["type"]; power = sdef["power"]
+    cds = battle_state.setdefault("cooldowns", {})
+    if cds.get(skill_name, 0) > 0:
+        return "Вміння на перезарядці."
+    text = f"✨ {skill_name}: "
+
+    if stype == "dmg":
+        from ..handlers.battle import roll_damage  # відкладений імпорт (щоб не циклитись)
+        dmg = max(1, roll_damage(player.atk + power, enemy.defense))
+        enemy.hp -= dmg
+        text += f"завдаєте {dmg} шкоди."
+    elif stype == "bleed":
+        est = battle_state.setdefault("e_status", {})
+        est["bleed"] = max(est.get("bleed", 0), power)  # тривалість
+        text += f"накладено кровотечу на {power} х."
+    elif stype == "stun":
+        est = battle_state.setdefault("e_status", {})
+        est["stun"] = max(est.get("stun", 0), power)
+        text += "ворог оглушений!"
+    elif stype == "buff_def":
+        pst = battle_state.setdefault("p_status", {})
+        pst["def_up"] = 1
+        pst["def_up_val"] = power
+        text += f"+{power} до захисту на цей раунд."
+    elif stype == "buff_atk":
+        pst = battle_state.setdefault("p_status", {})
+        pst["atk_up"] = 1
+        pst["atk_up_val"] = power
+        text += f"+{power} до атаки на цей раунд."
+    elif stype == "heal":
+        healed = min(player.max_hp - player.hp, power)
+        player.hp += healed
+        text += f"лікування {healed} HP."
+    else:
+        text += "нічого не сталося…"
+
+    cds[skill_name] = cd
+    return text
+
+def consume_player_temp_buffs(player, battle_state: dict) -> Tuple[int, int]:
+    """(atk_bonus, def_bonus) на атаку гравця. З’їдає ефект “на 1 хід”."""
+    pst = battle_state.setdefault("p_status", {})
+    atk_b = pst.get("atk_up_val", 0) if pst.get("atk_up") else 0
+    def_b = pst.get("def_up_val", 0) if pst.get("def_up") else 0
+    pst["atk_up"] = 0; pst["atk_up_val"] = 0
+    # def_up НЕ скидаємо тут — він впливає на атаку ворога; скинемо в enemy_turn
+    return atk_b, def_b
+
+def turn_tick_cooldowns(battle_state: dict) -> None:
+    cds = battle_state.setdefault("cooldowns", {})
+    for k in list(cds.keys()):
+        if cds[k] > 0:
+            cds[k] -= 1
+
+def apply_start_of_enemy_turn_effects(enemy, battle_state: dict) -> str:
+    """Початок ходу ворога: кровотечі тощо."""
+    est = battle_state.setdefault("e_status", {})
+    out = []
+    if est.get("bleed", 0) > 0:
+        bleed_dmg = max(1, int(enemy.max_hp * 0.05))
+        enemy.hp -= bleed_dmg
+        est["bleed"] -= 1
+        out.append(f"🩸 Кровотеча: -{bleed_dmg} HP ворогу.")
+    return "\n".join(out)
+
+def enemy_is_stunned(battle_state: dict) -> bool:
+    est = battle_state.setdefault("e_status", {})
+    if est.get("stun", 0) > 0:
+        est["stun"] -= 1
+        return True
+    return False
