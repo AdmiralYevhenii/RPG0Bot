@@ -9,6 +9,7 @@ from telegram.ext import ContextTypes, ConversationHandler, CallbackQueryHandler
 from ..models import ensure_player_ud, dict_to_enemy, Enemy
 from ..utils.equipment import damage_durability_on_hit
 from ..config import BLEED_TURNS, STUN_TURNS
+from rpg0.utils.equipment import damage_durability_on_hit
 
 CHOOSING_ACTION, ENEMY_TURN, LOOTING = range(3)
 
