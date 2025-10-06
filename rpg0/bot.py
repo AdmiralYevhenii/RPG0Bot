@@ -196,16 +196,28 @@ def build_app() -> Application:
 
     # Битва як розмова
     battle_conv = ConversationHandler(
-        entry_points=[CommandHandler("explore", explore)],
-        states={
-            CHOOSING_ACTION: [CallbackQueryHandler(on_battle_action)],
-            ENEMY_TURN: [],
-            LOOTING: [CallbackQueryHandler(after_loot)],
-        },
-        fallbacks=[CommandHandler("stats", stats)],
-        name="battle_conv",
-        persistent=True,
-    )
+    entry_points=[CommandHandler("explore", explore)],
+    states={
+        # Обробляємо ТІЛЬКИ бойові callback’и:
+        CHOOSING_ACTION: [
+            CallbackQueryHandler(
+                on_battle_action,
+                pattern=r"^(attack|defend|skill|potion|run|continue)$"
+            )
+        ],
+        ENEMY_TURN: [],
+        # На екрані «після бою» дозволяємо тільки "continue"
+        LOOTING: [CallbackQueryHandler(after_loot, pattern=r"^continue$")],
+    },
+    # /explore тепер доступний навіть якщо розмова активна
+    fallbacks=[
+        CommandHandler("stats", stats),
+        CommandHandler("explore", explore),
+        CommandHandler("cancel", lambda u, c: after_loot(u, c)),  # швидкий вихід
+    ],
+    name="battle_conv",
+    persistent=True,
+)
     app.add_handler(battle_conv)
 
     # Unknown + errors

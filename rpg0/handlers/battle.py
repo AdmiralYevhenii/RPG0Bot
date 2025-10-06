@@ -35,6 +35,9 @@ def battle_keyboard(p=None, in_battle: bool = True, battle_state: dict | None = 
     rows = [
         [InlineKeyboardButton("⚔️ Атака", callback_data="battle:attack"),
          InlineKeyboardButton("🛡️ Захист", callback_data="battle:defend")]
+        [InlineKeyboardButton("✨ Вміння",   callback_data="skill"),
+         InlineKeyboardButton("🧪 Зілля",    callback_data="potion")],
+        [InlineKeyboardButton("🏃 Втекти",   callback_data="run")],
     ]
     # Кнопки умінь із КД (до 3)
     if p:
