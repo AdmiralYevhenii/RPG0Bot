@@ -8,6 +8,8 @@ from telegram.ext import ContextTypes
 from ..models import ensure_player_ud
 from ..utils.loot import price_of_item, sell_value
 from ..utils.equipment import compute_price
+from ..utils.loot import price_of_item, sell_value, compute_price
+
 
 def shop_stock():
     return [
