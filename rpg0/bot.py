@@ -13,7 +13,10 @@ from telegram.constants import ParseMode
 from .config import BOT_DISPLAY_NAME, PERSIST_FILE, DEFAULT_LOCATION
 from .models import ensure_player_ud, Enemy
 from .handlers.registration import register, on_reg_action
-from .handlers.battle import CHOOSING_ACTION, ENEMY_TURN, LOOTING, on_battle_action, enemy_turn, after_loot, battle_keyboard
+from .handlers.battle import (
+    CHOOSING_ACTION, ENEMY_TURN, LOOTING,
+    on_battle_action, enemy_turn, after_loot, battle_keyboard
+)
 from .handlers.shop import shop, on_shop_action
 from .handlers.travel import travel, on_travel_select
 from .handlers.quest import quest, on_quest_action
@@ -23,14 +26,16 @@ from .utils.loot import generate_loot
 LOGGER = logging.getLogger("RPG")
 
 def format_stats(p) -> str:
-    inv_counts = {"⚪Звичайні": 0, "🟢Незвичайні": 0, "🔵Рідкісні": 0, "🟣Епічні": 0, "🟡Легендарні": 0}
+    inv_counts = {"⚪Звичайні": 0, "🟢Незвичайні": 0, "🔵Рідкісні": 0, "🟣Епічні": 0}
     for it in p.inventory:
         r = it.get("rarity", "common")
         if r == "common": inv_counts["⚪Звичайні"] += 1
         elif r == "uncommon": inv_counts["🟢Незвичайні"] += 1
         elif r == "rare": inv_counts["🔵Рідкісні"] += 1
         elif r == "epic": inv_counts["🟣Епічні"] += 1
-        elif r == "legendary": inv_counts["🟡Легендарні"] += 1
+        elif r == "legendary":
+            inv_counts.setdefault("🟡Легендарні", 0)
+            inv_counts["🟡Легендарні"] += 1
     inv_str = ", ".join([f"{k}:{v}" for k, v in inv_counts.items() if v]) or "порожньо"
 
     eq_short = []
@@ -43,11 +48,13 @@ def format_stats(p) -> str:
     cls = f"\nКлас: {p.class_name}" if p.class_name else ""
     bs = f"\nПередісторія: {p.backstory}" if p.backstory else ""
 
-    return (f"<b>{p.name}</b> — рівень {p.level}{cls}{bs}\n"
-            f"HP: {p.hp}/{p.max_hp} | Атака: {p.atk} | Захист: {p.defense}\n"
-            f"EXP: {p.exp}/{20 + (p.level - 1) * 10} | Зілля: {p.potions} | Золото: {p.gold}\n"
-            f"🧩 Екіп: {eq_str}\n"
-            f"🧰 Лут: {inv_str}")
+    return (
+        f"<b>{p.name}</b> — рівень {p.level}{cls}{bs}\n"
+        f"HP: {p.hp}/{p.max_hp} | Атака: {p.atk} | Захист: {p.defense}\n"
+        f"EXP: {p.exp}/{20 + (p.level - 1) * 10} | Зілля: {p.potions} | Золото: {p.gold}\n"
+        f"🧩 Екіп: {eq_str}\n"
+        f"🧰 Лут: {inv_str}"
+    )
 
 async def start(update, context: ContextTypes.DEFAULT_TYPE):
     ensure_player_ud(context.user_data)
@@ -74,7 +81,9 @@ async def help_cmd(update, context):
 async def newgame(update, context):
     from .models import Player
     context.user_data["player"] = Player().asdict()
-    await update.message.reply_html("🆕 <b>Нова пригода розпочата!</b> Ваш герой створений. /register — щоб обрати клас.")
+    await update.message.reply_html(
+        "🆕 <b>Нова пригода розпочата!</b> Ваш герой створений. /register — щоб обрати клас."
+    )
 
 async def stats(update, context):
     p = ensure_player_ud(context.user_data)
@@ -85,10 +94,24 @@ def get_location(ud):
 
 def spawn_enemy_for(p, location="Тракт") -> Enemy:
     tables = {
-        "Місто": [("П'яний хуліган", 18,5,1,10,8), ("Кишеньковий злодій", 20,6,2,12,12), ("Шибайголова", 22,7,2,14,14)],
-        "Тракт": [("Гоблін-набігник",18,5,1,12,10), ("Вовк лісовий",20,6,2,14,12), ("Розбійник тракту",24,8,3,18,16)],
-        "Руїни": [("Кістяний вартовий",22,7,2,16,14), ("Орк-берсерк",28,9,3,22,20), ("Рицар-відступник",32,10,4,26,24)],
-        "Гільдія авантюристів": [("Сторож гільдії (спаринг)", 18,6,2,8,0)],
+        "Місто": [
+            ("П'яний хуліган", 18, 5, 1, 10, 8),
+            ("Кишеньковий злодій", 20, 6, 2, 12, 12),
+            ("Шибайголова", 22, 7, 2, 14, 14),
+        ],
+        "Тракт": [
+            ("Гоблін-набігник", 18, 5, 1, 12, 10),
+            ("Вовк лісовий", 20, 6, 2, 14, 12),
+            ("Розбійник тракту", 24, 8, 3, 18, 16),
+        ],
+        "Руїни": [
+            ("Кістяний вартовий", 22, 7, 2, 16, 14),
+            ("Орк-берсерк", 28, 9, 3, 22, 20),
+            ("Рицар-відступник", 32, 10, 4, 26, 24),
+        ],
+        "Гільдія авантюристів": [
+            ("Сторож гільдії (спаринг)", 18, 6, 2, 8, 0),
+        ],
     }
     import random
     name, base_hp, base_atk, base_def, exp, gold = random.choice(tables.get(location, tables["Тракт"]))
@@ -97,16 +120,20 @@ def spawn_enemy_for(p, location="Тракт") -> Enemy:
     defense = base_def + (p.level // 3)
     exp_reward = exp + (p.level - 1) * 3
     gold_reward = gold + random.randint(0, p.level * 2)
-    return Enemy(name=name, hp=hp, max_hp=hp, atk=atk, defense=defense,
-                 exp_reward=exp_reward, gold_reward=gold_reward)
+    return Enemy(
+        name=name, hp=hp, max_hp=hp, atk=atk, defense=defense,
+        exp_reward=exp_reward, gold_reward=gold_reward
+    )
 
 async def explore(update, context):
-    import random as R
+    from telegram.ext import ConversationHandler
     p = ensure_player_ud(context.user_data)
     if not p.registered:
         await update.message.reply_html("Спершу зареєструйтесь у гільдії: /register")
         return ConversationHandler.END
+
     location = get_location(context.user_data)
+    import random as R
     roll = R.random()
     if roll < 0.6:
         enemy = spawn_enemy_for(p, location)
@@ -128,7 +155,8 @@ async def explore(update, context):
         )
         return ConversationHandler.END
     else:
-        healed = min(p.max_hp - p.hp, R.randint(5, 12))
+        import random
+        healed = min(p.max_hp - p.hp, random.randint(5, 12))
         p.hp += healed
         context.user_data["player"] = p.asdict()
         await update.message.reply_html(f"⛺ Відпочинок: +{healed} HP. Тепер {p.hp}/{p.max_hp}.")

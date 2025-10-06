@@ -4,7 +4,10 @@ from .bot import build_app
 from .config import WEBHOOK_URL, PORT, WEBHOOK_PATH
 
 LOGGER = logging.getLogger("RPG")
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+)
 
 def main() -> None:
     app = build_app()
