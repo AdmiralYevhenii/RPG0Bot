@@ -23,6 +23,9 @@ from .handlers.quest import quest, on_quest_action
 from .handlers.inventory import inventory, on_inv_action
 from .handlers.guild import guild, on_guild_action, GUILD_LOC_NAME
 from .utils.loot import generate_loot
+from .config import BOT_DISPLAY_NAME, PERSIST_FILE, DEFAULT_LOCATION, WEBHOOK_URL, PORT, WEBHOOK_PATH, LOC_SHOP, LOC_OLD_FOREST
+from .handlers.guild import guild, on_guild_action, GUILD_LOC_NAME
+
 
 LOGGER = logging.getLogger("RPG")
 
@@ -97,8 +100,12 @@ def spawn_enemy_for(p, location="Тракт") -> Enemy:
         "Тракт": [("Гоблін-набігник",18,5,1,12,10), ("Вовк лісовий",20,6,2,14,12), ("Розбійник тракту",24,8,3,18,16)],
         "Руїни": [("Кістяний вартовий",22,7,2,16,14), ("Орк-берсерк",28,9,3,22,20), ("Рицар-відступник",32,10,4,26,24)],
         GUILD_LOC_NAME: [("Сторож гільдії (спаринг)", 18,6,2,8,0)],
+        LOC_OLD_FOREST: [("Лісовий дух", 26,8,2,20,18), ("Химерний троль", 30,9,3,22,22), ("Сухоліс", 24,8,2,18,16)],
     }
-    name, base_hp, base_atk, base_def, exp, gold = random.choice(tables.get(location, tables["Тракт"]))
+    import random
+    if location not in tables:
+        location = "Тракт"
+    name, base_hp, base_atk, base_def, exp, gold = random.choice(tables[location])
     hp = base_hp + (p.level - 1) * 4
     atk = base_atk + (p.level - 1)
     defense = base_def + (p.level // 3)
@@ -112,13 +119,18 @@ async def explore(update, context):
     if not p.registered:
         await update.message.reply_html("Спершу зареєструйтесь у гільдії: /register")
         return ConversationHandler.END
-    location = get_location(context.user_data)
+
+    location = context.user_data.get("location", DEFAULT_LOCATION)
+    if location == LOC_SHOP:
+        await update.message.reply_html("🛒 Ви перебуваєте в крамниці — тут не воюють. Скористайтесь /shop або /travel, щоб вийти.")
+        return ConversationHandler.END
+
+    import random
     roll = random.random()
     if roll < 0.6:
         enemy = spawn_enemy_for(p, location)
         context.user_data["enemy"] = enemy.__dict__
         context.user_data["defending"] = False
-        # Скинути бойовий стан (КД/статуси)
         context.user_data["battle"] = {"cooldowns": {}, "e_status": {}, "p_status": {}}
         await update.message.reply_html(
             f"🔪 [{location}] Ви натрапили на <b>{enemy.name}</b>!\nHP ворога: {enemy.hp}/{enemy.max_hp}",
@@ -126,6 +138,7 @@ async def explore(update, context):
         )
         return CHOOSING_ACTION
     elif roll < 0.85:
+        from .utils.loot import generate_loot
         item = generate_loot(location)
         p.inventory.append(item)
         p.gold += item.get("gold", 0)
